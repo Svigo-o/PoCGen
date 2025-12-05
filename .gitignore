@@ -1,0 +1,46 @@
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+
+# ----- Editors / OS -----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ----- Logs / Caches -----
+*.log
+log/
+logs/
+.pytest_cache/
+.cache/
+
+# ----- Playwright (optional) -----
+playwright-report/
+test-results/
+*.webm
+
+# ----- Project-specific: Burp Extender -----
+# Do NOT commit local build outputs
+burp_extender/build/
+burp_extender/build/**
+
+# Do NOT commit large JARs
+burp_extender/libs/*.jar
+burp_extender/build/libs/*.jar
+
+# Allow docs/placeholders under libs
+!burp_extender/libs/README.md
+!burp_extender/libs/.keep
+
+# ----- Misc -----
+**/__pycache__/
