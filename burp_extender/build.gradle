@@ -1,0 +1,31 @@
+plugins {
+    id 'java'
+}
+
+group 'com.svigo.pocgen'
+version '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // You need to provide burp-extender-api.jar manually if not available on maven.
+    // Put it under libs/ and Gradle will include it.
+    implementation files('libs/burp-extender-api.jar')
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+task fatJar(type: Jar) {
+    archiveBaseName = 'BurpExtender'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+    manifest {
+        attributes 'Main-Class': 'BurpExtender'
+    }
+}
