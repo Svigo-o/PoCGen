@@ -2,30 +2,52 @@ plugins {
     id 'java'
 }
 
-group 'com.svigo.pocgen'
-version '0.1.0'
+group = 'com.svigo.pocgen'
+version = '0.2.0'
+
+description = 'Burp Suite extension exposing HTTP API for PoCGen automation'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
+}
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    // You need to provide burp-extender-api.jar manually if not available on maven.
-    // Put it under libs/ and Gradle will include it.
-    implementation files('libs/burp-extender-api.jar')
+    compileOnly files('libs/burp-extender-api.jar')
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(21)
 }
 
-task fatJar(type: Jar) {
-    archiveBaseName = 'BurpExtender'
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
-    with jar
+jar {
+    archiveBaseName.set('burp-extender-llm-controller')
     manifest {
-        attributes 'Main-Class': 'BurpExtender'
+        attributes(
+                'Implementation-Title': 'LLM Proxy Controller',
+                'Implementation-Version': project.version,
+                'Built-By': System.properties['user.name'],
+                'Built-JDK': System.getProperty('java.version'),
+                'Created-By': "Gradle ${gradle.gradleVersion}"
+        )
     }
+}
+
+// Optional fat jar if runtime dependencies are added later
+tasks.register('fatJar', Jar) {
+    archiveClassifier.set('all')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    manifest.from(jar.manifest)
 }

@@ -44,3 +44,7 @@ burp_extender/build/libs/*.jar
 
 # ----- Misc -----
 **/__pycache__/
+
+# ----- Project outputs -----
+# Ignore generated PoC output files
+outputs/

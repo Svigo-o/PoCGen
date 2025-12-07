@@ -17,10 +17,16 @@ BURP_PROXY = os.environ.get("BURP_PROXY", "http://127.0.0.1:8080")
 LISTEN_HOST = os.environ.get("BROWSER_DRV_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("BROWSER_DRV_PORT", "7000"))
 
+def _get_headless_flag() -> bool:
+    raw = os.environ.get("BROWSER_HEADLESS", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+HEADLESS = _get_headless_flag()
+
 async def init_browser():
     global PW, BROWSER, CTX, PAGE
     PW = await async_playwright().start()
-    BROWSER = await PW.chromium.launch(headless=False)
+    BROWSER = await PW.chromium.launch(headless=HEADLESS)
     CTX = await BROWSER.new_context(proxy={"server": BURP_PROXY})
     PAGE = await CTX.new_page()
 
