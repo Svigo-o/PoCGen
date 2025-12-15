@@ -18,6 +18,21 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=65535)
     parser.add_argument("--out", default=None, help="输出目录，默认使用配置中的 outputs 目录")
     parser.add_argument("--attacker", default=None, help="攻击机 URL（用于 wget 取回 net.sh），默认从配置 POCGEN_ATTACKER_URL 读取")
+    parser.add_argument("--probe-target", action="store_true", help="在生成前主动访问 target，采集响应样本并提供给 LLM")
+    parser.add_argument("--auto-validate", action="store_true", help="生成后自动向 target 发送 PoC 进行验证（需 target 可访问）")
+    parser.add_argument("--max-iters", type=int, default=None, help="最大尝试次数（默认读取配置 POCGEN_MAX_ITERS）")
+    parser.add_argument("--monitor-timeout", type=float, default=None, help="每次验证后等待攻击机 wget 回调的秒数")
+    parser.add_argument("--stop-on-success", dest="stop_on_success", action="store_true", help="监测到 wget 回调后立即停止后续尝试")
+    parser.add_argument("--no-stop-on-success", dest="stop_on_success", action="store_false", help="即便检测到 wget 回调也继续剩余尝试")
+    parser.set_defaults(stop_on_success=None)
+    parser.add_argument("--login-url", default=None, help="可选，登录请求的完整 URL，缺省时使用 target + /login")
+    parser.add_argument("--login-username", default=None, help="可选，登录用户名，缺省不传；若仅给密码，则用户名为空字符串")
+    parser.add_argument("--login-password", default=None, help="可选，登录密码")
+    parser.add_argument("--login-user-field", default="username", help="登录表单用户名字段名，默认 username")
+    parser.add_argument("--login-pass-field", default="password", help="登录表单密码字段名，默认 password")
+    parser.add_argument("--login-method", default="post", help="登录 HTTP 方法，默认 post")
+    parser.add_argument("--browser-login", action="store_true", help="使用 Playwright 浏览器登录以获取 cookie 后再验证")
+    parser.add_argument("--browser-headful", action="store_true", help="浏览器登录时显示界面（headful），默认无头模式")
     args = parser.parse_args()
 
     if args.desc:
@@ -37,6 +52,19 @@ def main() -> None:
         max_tokens=args.max_tokens,
         output_dir=args.out,
         attacker_url=args.attacker,
+        probe_target=args.probe_target,
+        auto_validate=args.auto_validate,
+        max_iterations=args.max_iters,
+        stop_on_success=args.stop_on_success,
+        monitor_timeout=args.monitor_timeout,
+        login_url=args.login_url,
+        login_username=args.login_username,
+        login_password=args.login_password,
+        login_user_field=args.login_user_field,
+        login_pass_field=args.login_pass_field,
+        login_method=args.login_method,
+        use_browser_login=args.browser_login,
+        browser_headless=None if not args.browser_headful else False,
     )
 
     print("\nGenerated and saved the following PoC files:")

@@ -62,6 +62,11 @@ def save_messages(raw_messages: List[str], output_dir: str) -> List[str]:
     for i, raw in enumerate(raw_messages, start=1):
         fname = f"poc_{ts}_{i:02d}.http"
         fpath = os.path.join(output_dir, fname)
+        counter = 1
+        while os.path.exists(fpath):
+            fname = f"poc_{ts}_{i:02d}_{counter}.http"
+            fpath = os.path.join(output_dir, fname)
+            counter += 1
         # Normalize Content-Length before saving; do not append extra newline to avoid skewing length
         normalized = _adjust_content_length(raw)
         with open(fpath, "w", encoding="utf-8") as f:

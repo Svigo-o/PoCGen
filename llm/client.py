@@ -3,10 +3,29 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-import httpx
+from openai import OpenAI
+from openai import OpenAIError
 from pydantic import BaseModel
 
 from PoCGen.config.config import SETTINGS
+
+
+class ProviderConfig(BaseModel):
+    name: str
+    base_url: str
+    api_key: str
+    model: str
+
+    def build_client(self, timeout: Optional[int]) -> OpenAI:
+        kwargs: Dict[str, Any] = {
+            "api_key": self.api_key,
+        }
+        base = (self.base_url or "").strip()
+        if base:
+            kwargs["base_url"] = base.rstrip("/")
+        if timeout:
+            kwargs["timeout"] = timeout
+        return OpenAI(**kwargs)
 
 
 class ChatMessage(BaseModel):
@@ -17,57 +36,70 @@ class ChatMessage(BaseModel):
 class LLMClient:
     def __init__(
         self,
+        provider: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
     ) -> None:
-        s = SETTINGS.llm
-        self.base_url = (base_url or s.base_url).rstrip("/")
-        self.api_key = api_key or s.api_key
-        self.model = model or s.model
-        self.timeout = timeout_seconds or s.timeout_seconds
-        self.extra_body = extra_body or s.extra_body
+        settings = SETTINGS.llm
 
-        self._client = httpx.Client(timeout=self.timeout)
+        self.timeout = timeout_seconds or settings.timeout_seconds
+        self._provider = self._build_provider(
+            provider_name=provider,
+            base_url_override=base_url,
+            api_key_override=api_key,
+            model_override=model,
+        )
+        self._client = self._provider.build_client(self.timeout)
 
-    def chat(self, messages: List[ChatMessage], temperature: float = 0.2, max_tokens: int = 2048) -> str:
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+    def _build_provider(
+        self,
+        provider_name: Optional[str],
+        base_url_override: Optional[str],
+        api_key_override: Optional[str],
+        model_override: Optional[str],
+    ) -> ProviderConfig:
+        settings = SETTINGS.llm
+        providers = {k.lower(): v for k, v in settings.providers.items()}
+        if not providers:
+            raise RuntimeError("No LLM providers configured")
+
+        key = (provider_name or settings.default_provider).lower()
+        provider_settings = providers.get(key)
+        if provider_settings is None:
+            # Fallback to first available provider
+            key, provider_settings = next(iter(providers.items()))
+
+        return ProviderConfig(
+            name=key,
+            base_url=base_url_override or provider_settings.base_url,
+            api_key=api_key_override or provider_settings.api_key,
+            model=model_override or provider_settings.model,
+        )
+
+    def chat(self, messages: List[ChatMessage], temperature: float = 0.2, max_tokens: int = 4000) -> str:
         payload: Dict[str, Any] = {
-            "model": self.model,
+            "model": self._provider.model,
             "messages": [m.model_dump() for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # Attach extra body under a dedicated key (common pattern for OpenAI-compatible proxies)
-        if self.extra_body:
-            payload["extra_body"] = self.extra_body
 
-        resp = self._client.post(url, headers=headers, json=payload)
         try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            # Surface server error detail to help troubleshooting
-            detail: str
-            try:
-                detail = json.dumps(resp.json(), ensure_ascii=False)
-            except Exception:
-                detail = resp.text
-            raise RuntimeError(f"LLM API error {resp.status_code}: {detail}") from e
-        data = resp.json()
+            response = self._client.chat.completions.create(**payload)
+        except OpenAIError as exc:
+            raise RuntimeError(f"LLM API error: {exc}") from exc
+
         try:
-            return data["choices"][0]["message"]["content"]
+            return response.choices[0].message.content
         except Exception:
-            # Fallback to raw json
-            return json.dumps(data, ensure_ascii=False)
+            return json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
 
     def close(self) -> None:
-        self._client.close()
+        close_method = getattr(self._client, "close", None)
+        if callable(close_method):
+            close_method()
 
 
 __all__ = ["LLMClient", "ChatMessage"]

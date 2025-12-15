@@ -40,16 +40,48 @@ class HTTPMessage:
 
 
 @dataclass
+class ValidationResult:
+    request_index: int
+    url: str
+    status_code: Optional[int]
+    success: bool
+    response_preview: str = ""
+    error: Optional[str] = None
+
+
+@dataclass
+class AttemptResult:
+    attempt_index: int
+    raw_output: str
+    requests: List[HTTPMessage]
+    saved_paths: List[str]
+    validation_results: Optional[List[ValidationResult]]
+    monitor_hit: bool
+    monitor_summary: Optional[str]
+    feedback: Optional[str]
+
+
+@dataclass
 class GenerationResult:
     raw_output: str
     requests: List[HTTPMessage]
     saved_paths: List[str]
+    validation_results: Optional[List[ValidationResult]] = None
+    attempts: Optional[List[AttemptResult]] = None
+    success: Optional[bool] = None
 
 
 class VulnHandler:
     name: str = "base"
 
-    def build_messages(self, description: str, code_texts: List[str], target: Optional[str]) -> List[dict]:
+    def build_messages(
+        self,
+        description: str,
+        code_texts: List[str],
+        target: Optional[str],
+        attacker_url: Optional[str] = None,
+        target_profile: Optional[str] = None,
+    ) -> List[dict]:
         raise NotImplementedError
 
     def post_process(self, raw_output: str) -> List[str]:
