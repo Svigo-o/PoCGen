@@ -6,6 +6,12 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 
+# 默认输出根目录（统一放置生成结果、采样、cookie 等）
+OUTPUT_ROOT_DEFAULT = os.getenv(
+    "POCGEN_OUTPUT_ROOT",
+    os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "output")),
+)
+
 # Load .env if present
 load_dotenv()
 
@@ -60,17 +66,12 @@ class LLMSettings(BaseModel):
 class AppSettings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     save_dir: str = Field(
-        default=os.getenv(
-            "POCGEN_OUTPUT_DIR",
-            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "output")),
-        )
+        default=os.getenv("POCGEN_OUTPUT_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "poc"))
     )
     collect_dir: str = Field(
-        default=os.getenv(
-            "POCGEN_COLLECT_DIR",
-            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "collect")),
-        )
+        default=os.getenv("POCGEN_COLLECT_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "collect"))
     )
+    cookie_dir: str = Field(default=os.getenv("POCGEN_COOKIE_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "cookie")))
     default_vuln_type: str = Field(default=os.getenv("POCGEN_VULN_TYPE", "command_injection_http"))
     attacker_url: str = Field(default=os.getenv("POCGEN_ATTACKER_URL", "http://192.168.6.1:6666/testpoc"))
     bridge_url: str | None = Field(default=os.getenv("POCGEN_BRIDGE_URL", "http://127.0.0.1:7002"))

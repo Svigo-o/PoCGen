@@ -297,7 +297,9 @@ def sample_target_with_playwright(
             import os
             import time
 
-            cookies_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "cookie"))
+            cookies_dir = getattr(SETTINGS, "cookie_dir", None) or os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..", "cookie")
+            )
             os.makedirs(cookies_dir, exist_ok=True)
 
             ck = context.cookies()
@@ -352,7 +354,7 @@ def sample_target_with_playwright(
                 else:
                     req_body_str = str(request_body)
 
-            cookies_dir = "/home/li/LLM_POC/PoCGen/cookie"
+            cookies_dir = getattr(SETTINGS, "cookie_dir", "/home/li/LLM_POC/PoCGen/cookie")
             os.makedirs(cookies_dir, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
             fname = os.path.join(cookies_dir, f"{ts}-cookie.http")

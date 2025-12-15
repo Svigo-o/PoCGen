@@ -70,7 +70,6 @@ def generate_poc(
     vuln_type: Optional[str] = None,
     temperature: float = 0.2,
     max_tokens: int = 4000,
-    output_dir: Optional[str] = None,
     attacker_url: Optional[str] = None,
     probe_target: bool = False,
     auto_validate: bool = False,
@@ -94,8 +93,7 @@ def generate_poc(
         max_iters = 1
     stop_after_success = SETTINGS.stop_on_success if stop_on_success is None else stop_on_success
     monitor_wait = monitor_timeout or SETTINGS.monitor_timeout
-
-    out_dir = output_dir or SETTINGS.save_dir
+    out_dir = SETTINGS.save_dir
     attempts: List[AttemptResult] = []
     feedback_text: Optional[str] = None
     overall_success = False

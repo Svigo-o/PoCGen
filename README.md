@@ -6,10 +6,16 @@ PoCGen 用于从“若干代码文件 + 漏洞描述”中，让大模型自动�
 - 输入：多份代码文件（原始文本）+ 漏洞描述（文本）
 - 输出：一条或多条“原始 HTTP 请求”作为 PoC（.http 文件）
 - 基于 OpenAI Python SDK 的 LLM 调用，保留“思考模式”开关
-- 基础 HTTP 报文解析与校验，自动保存到 output/
+- 基础 HTTP 报文解析与校验，自动保存到 `output/`
 - 通过处理器（Handler）机制扩展不同漏洞类型
 - 支持“采样 -> 生成 -> 自动验证 -> 攻击机回调监控”的多轮迭代，直到满足成功条件或达到最大迭代次数
- - 采样到的 HTTP 范本会额外落盘到 `collect/` 目录，便于复现与比对
+- 采样到的 HTTP 范本会额外落盘到 `collect/` 目录，便于复现与比对
+- 浏览器登录采样（Playwright）：自动尝试表单登录、点击按钮、提交表单，采集最终页面/响应；获取到的 Cookie 会按原始 HTTP 报文保存
+- 原始报文落盘（统一输出根目录，默认 `output/`）：
+   - PoC 请求：`output/poc/poc_<timestamp>_nn.http`
+   - 采样样本：`output/collect/sample_<timestamp>.txt`
+   - 浏览器 Cookie 原始报文：`output/cookie/<YYYYMMDD_HHMMSS>-cookies.json`
+   - 浏览器最终请求/响应原始报文：`output/cookie/<YYYYMMDD_HHMMSS>-cookie.http`
 
 ## 目录结构与模块说明
 
@@ -41,8 +47,9 @@ PoCGen 用于从“若干代码文件 + 漏洞描述”中，让大模型自动�
 
 - `cli.py`：命令行入口，便于一键运行。
 - `tests/`：最小单元测试（解析与提示拼装）。
-- `output/`：生成的 .http PoC 文件输出目录。
-- `collect/`：采集到的 HTTP 报文样本存档目录。
+- `output/poc/`：生成的 .http PoC 文件输出目录。
+- `output/collect/`：采集到的 HTTP 报文样本存档目录。
+- `output/cookie/`：浏览器采样阶段保存的原始报文（包含 Cookie 和完整请求/响应）。
 - `tools/`：预留工具位（例如后续的“安全发送器”“格式转换器”等）。
 
 ## 安装与环境要求
@@ -65,8 +72,10 @@ python -m pip install -r .\PoCGen\requirements.txt
 - `POCGEN_DS_MODEL`（默认：`deepseek`）
 - `POCGEN_DEFAULT_PROVIDER`（默认：`qwen`，可切换到 `deepseek` 等）
 - `POCGEN_TIMEOUT`（LLM 请求超时秒数，默认 60）
-- `POCGEN_OUTPUT_DIR`（默认：项目内 `PoCGen/output`）
-- `POCGEN_COLLECT_DIR`（默认：项目内 `PoCGen/collect`）
+- `POCGEN_OUTPUT_ROOT`（输出根目录，默认 `PoCGen/output`）
+- `POCGEN_OUTPUT_DIR`（PoC 输出目录，默认 `${POCGEN_OUTPUT_ROOT}/poc`）
+- `POCGEN_COLLECT_DIR`（采样目录，默认 `${POCGEN_OUTPUT_ROOT}/collect`）
+- `POCGEN_COOKIE_DIR`（浏览器报文目录，默认 `${POCGEN_OUTPUT_ROOT}/cookie`）
 - `POCGEN_VULN_TYPE`（默认：`command_injection_http`）
 - `POCGEN_ATTACKER_URL`（注入 payload 需要访问的攻击机 URL）
 - `POCGEN_HTTP_PROXY`（可选，若希望采样/验证流量经 Burp，可设置为 `http://127.0.0.1:8080`）
@@ -76,6 +85,8 @@ python -m pip install -r .\PoCGen\requirements.txt
 - `POCGEN_MAX_ITERS`（默认最大尝试次数，默认 1）
 - `POCGEN_STOP_ON_SUCCESS`（是否在监控到 wget 回调后立即停止，默认 true）
 - `POCGEN_MONITOR_TIMEOUT`（每轮验证后等待 wget 回调的秒数，默认 10）
+- `BROWSER_HEADLESS`（浏览器采样是否无头，默认 true；可设为 false 观察界面）
+- `POCGEN_SAMPLE_PREVIEW_CHARS`（采样预览长度，默认 2000，可覆盖）
 
 PowerShell 示例：
 ```powershell
@@ -96,11 +107,11 @@ $env:POCGEN_DS_API_KEY = "DeepseekV3.1_32@C402"
 准备一份漏洞描述（可参考 `PoCGen/data/desc.txt`），以及若干代码文件（可直接传入路径或通配符）。然后执行：
 
 ```powershell
-# 最小示例
-python -m PoCGen.cli --desc .\PoCGen\data\desc.txt --code .\VulnAgent\agent\*.py --out .\PoCGen\output
+# 最小示例（输出目录使用默认设置）
+python -m PoCGen.cli --desc .\PoCGen\data\desc.txt --code .\VulnAgent\agent\*.py
 
 # 带目标提示（仅用于提示词构造，不会真实发包）
-python -m PoCGen.cli --desc .\PoCGen\data\desc.txt --code .\VulnAgent\agent\*.py --target http://192.168.0.1:80 --out .\PoCGen\output
+python -m PoCGen.cli --desc .\PoCGen\data\desc.txt --code .\VulnAgent\agent\*.py --target http://192.168.0.1:80
 
 # 启用目标探测 + 自动验证（确保 target 可达，且必要时设置 POCGEN_HTTP_PROXY 让流量经过 Burp）
 python -m PoCGen.cli --desc desc.txt --code src/*.c --target http://192.168.6.2 --probe-target --auto-validate
@@ -108,6 +119,11 @@ python -m PoCGen.cli --desc desc.txt --code src/*.c --target http://192.168.6.2 
 # 多轮迭代示例（最多 5 轮，监控回调 15 秒）
 python -m PoCGen.cli --desc desc.txt --code src/*.c --target http://192.168.6.2 \
    --probe-target --auto-validate --max-iters 5 --monitor-timeout 15
+
+# 浏览器登录采样 + 自动验证（获取 Cookie 并落盘原始报文）
+python -m PoCGen.cli --code src/*.c --target http://192.168.6.2 \
+   --probe-target --browser-login --login-url http://192.168.6.2/ \
+   --login-username admin --login-password admin --auto-validate
 ```
 
 成功后，生成的 PoC 会以时间戳命名的 `.http` 文件保存在 `output/` 目录中。所有迭代共用同一目录，文件名如 `poc_20250101_120000_01.http`，若出现重名会自动附加序号避免覆盖。
@@ -120,6 +136,9 @@ python -m PoCGen.cli --desc desc.txt --code src/*.c --target http://192.168.6.2 
 4. `llm/client.py` 调用大模型（附带 `extra_body` 启用思考模式）。
 5. `postprocess.py` 分割模型输出为多条 HTTP 报文，做最小校验，写入 `output/`（所有迭代共享目录）。
 6. 若启用了 `--probe-target`，采集到的 HTTP 报文会写入 `collect/`，供复现与提示词调优。
+7. 若启用了 `--browser-login`，Playwright 会尝试登录、点击按钮、提交表单，并将：
+   - 登录后的 Cookie 以原始 `Set-Cookie` 报文形式写入 `cookie/<ts>-cookies.json`；
+   - 终态请求/响应的原始 HTTP 报文写入 `cookie/<ts>-cookie.http`。
 7. 返回 `GenerationResult`（包含原始输出、解析对象与保存路径）。
 
 ## 浏览器自动化 + Burp 联动验证（可选）
