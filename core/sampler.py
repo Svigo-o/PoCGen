@@ -5,17 +5,17 @@ from typing import Optional, Tuple, List, Dict, Any
 import json
 import re
 
-import httpx
 from playwright.sync_api import sync_playwright
 
 from PoCGen.llm.client import LLMClient, ChatMessage
 
 from PoCGen.config.config import SETTINGS
-from PoCGen.core.target_profile import TargetSample, fetch_target_sample
+from PoCGen.core.target_profile import TargetSample
 
 
 LOG_DIR = None
 LOG_FILE = None
+REQUEST_LOG_DIR = "/home/li/LLM_POC/PoCGen/output/request"
 
 
 def _ensure_log():
@@ -35,20 +35,95 @@ def _log(message: str) -> None:
         from datetime import datetime, timezone, timedelta
 
         tz = timezone(timedelta(hours=8))
-        ts = datetime.now(tz).isoformat()
+        ts = datetime.now(tz).strftime("%Y-%m-%dT%H:%M:%S")
         with open(LOG_FILE, "a", encoding="utf-8") as fh:
-            fh.write(f"[{ts} UTC+08] {message}\n")
+            fh.write(f"[{ts}] {message}\n")
     except Exception:
         pass
 
 
-def sample_target(
-    target: str,
-    session: Optional[httpx.Client] = None,
-    timeout: Optional[float] = None,
-    preview_chars: Optional[int] = None,
-) -> TargetSample:
-    return fetch_target_sample(target, timeout=timeout or SETTINGS.sample_timeout, preview_chars=preview_chars, client=session)
+def _ensure_request_dir():
+    try:
+        import os
+
+        os.makedirs(REQUEST_LOG_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _setup_network_logging(context, tag: str = "login"):
+    """Attach Playwright listeners to dump POST request raw payloads.
+
+    Only outgoing POST requests are captured,并以标准 HTTP 报文格式写入：
+    请求行 + 头部 + 空行 + body。
+    """
+
+    import os
+    import time
+    from urllib.parse import urlsplit
+
+    _ensure_request_dir()
+
+    seq = {"n": 0}
+
+    def _safe_str_body(body: Any, limit: int = 8000) -> str:
+        try:
+            if body is None:
+                return ""
+            if isinstance(body, (bytes, bytearray)):
+                return body.decode("utf-8", errors="replace")[:limit]
+            text = str(body)
+            return text[:limit]
+        except Exception:
+            return "<body decode failed>"
+
+    def _on_request(request):
+        try:
+            method = (request.method or "").upper()
+            if method != "POST":
+                return
+            seq["n"] += 1
+            req_id = seq["n"]
+            ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            headers = dict(getattr(request, "headers", {}) or {})
+            body = _safe_str_body(getattr(request, "post_data", None))
+            parsed = urlsplit(request.url or "")
+            path_q = parsed.path or "/"
+            if parsed.query:
+                path_q += f"?{parsed.query}"
+
+            request_line = f"{method} {path_q} HTTP/1.1"
+
+            # ensure Host header存在
+            has_host = any(k.lower() == "host" for k in headers.keys())
+            if not has_host and parsed.netloc:
+                headers = {"Host": parsed.netloc, **headers}
+
+            fname = os.path.join(
+                REQUEST_LOG_DIR,
+                f"{tag}_{ts}_{req_id:04d}.http",
+            )
+
+            lines = []
+            lines.append(request_line)
+            for k, v in headers.items():
+                lines.append(f"{k}: {v}")
+            lines.append("")
+            if body:
+                lines.append(body)
+            content = "\n".join(lines)
+
+            with open(fname, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(content)
+            _log(f"network log saved {fname} method=POST url={request.url}")
+        except Exception as exc:
+            _log(f"network log request hook failed: {exc}")
+
+    try:
+        context.on("request", _on_request)
+        _log(f"network logging attached tag={tag} dir={REQUEST_LOG_DIR} mode=POST")
+    except Exception as exc:
+        _log(f"attach network logging failed: {exc}")
 
 
 def sample_target_with_playwright(
@@ -116,7 +191,34 @@ def sample_target_with_playwright(
                         name = inp.get_attribute("name") or ""
                         placeholder = inp.get_attribute("placeholder") or ""
                         label = inp.get_attribute("aria-label") or ""
-                        inputs.append({"name": name, "type": itype, "placeholder": placeholder, "label": label})
+                        try:
+                            value = inp.get_attribute("value") or inp.inner_text() or ""
+                        except Exception:
+                            value = ""
+                        try:
+                            visible = inp.is_visible()
+                        except Exception:
+                            visible = False
+                        try:
+                            disabled = inp.is_disabled()
+                        except Exception:
+                            disabled = False
+                        try:
+                            readonly = inp.get_attribute("readonly") is not None
+                        except Exception:
+                            readonly = False
+                        inputs.append(
+                            {
+                                "name": name,
+                                "type": itype,
+                                "placeholder": placeholder,
+                                "label": label,
+                                "value": value,
+                                "visible": visible,
+                                "disabled": disabled,
+                                "readonly": readonly,
+                            }
+                        )
                     except Exception:
                         continue
                 forms.append({"index": idx, "method": method, "action": action, "inputs": inputs})
@@ -232,59 +334,11 @@ def sample_target_with_playwright(
         )
         return _ask_llm(prompt, expected_keys=["form_index", "username_field", "password_field"])
 
-    def _httpx_replay_post(submission: Dict[str, Any], context) -> Optional[httpx.Response]:
-        try:
-            if not submission:
-                return None
-            url = submission.get("url")
-            data = submission.get("data") or {}
-            if not url:
-                return None
-            cookies_ctx = context.cookies()
-            jar = httpx.Cookies()
-            for ck in cookies_ctx:
-                try:
-                    jar.set(ck.get("name"), ck.get("value"), domain=ck.get("domain"), path=ck.get("path"))
-                except Exception:
-                    continue
-            with httpx.Client(cookies=jar, verify=False, timeout=15) as client:
-                resp = client.post(url, data=data)
-                _log(f"httpx replay POST {url} status={resp.status_code}")
-                return resp
-        except Exception as exc:
-            _log(f"httpx replay failed: {exc}")
-            return None
-
-    def _llm_pick_post_form(forms: List[Dict[str, Any]], login_username: Optional[str], login_password: Optional[str]) -> Optional[Dict[str, Any]]:
-        if not forms:
-            return None
-        prompt = (
-            "你是安全测试助手。下面是已登录页面的表单列表，请选出一个最可能被提交的表单，并给出需要填写的字段和值。"
-            "严格输出 JSON，不能包含除 JSON 外的任何内容，不要加反引号、前后缀或解释。"
-            "格式: {\"form_index\": int, \"field_values\": {<field>: <value>}}。"
-            "如果看到密码或账号类字段，请复用已知凭据；无法判断时返回空对象 {}。\n"
-            f"已知用户名: {login_username}, 已知密码: {login_password}\n"
-            f"表单: {forms}"
-        )
-        return _ask_llm(prompt, expected_keys=["form_index", "field_values"])
-
     def _llm_pick_login_button(buttons: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not buttons:
             return None
         prompt = (
             "你是安全测试助手。下面是登录页上可见的按钮列表，请选择最可能用于登录的按钮。"
-            "严格输出 JSON，不能包含除 JSON 外的任何内容，不要加反引号、说明或前缀。"
-            "格式: {\"button_index\": int}，若无法判断返回 {}。\n"
-            f"按钮列表: {buttons}"
-        )
-        return _ask_llm(prompt, expected_keys=["button_index"])
-
-    def _llm_pick_action_button(buttons: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if not buttons:
-            return None
-        prompt = (
-            "你是安全测试助手。下面是登录后页面上可见的按钮列表，请选择一个最可能触发 POST 请求或进入下一步（提交、保存、确认、进入配置等）的按钮。"
-            "优先考虑与 form method=post 关联、或文本含提交/保存/应用的按钮。"
             "严格输出 JSON，不能包含除 JSON 外的任何内容，不要加反引号、说明或前缀。"
             "格式: {\"button_index\": int}，若无法判断返回 {}。\n"
             f"按钮列表: {buttons}"
@@ -304,7 +358,7 @@ def sample_target_with_playwright(
 
             ck = context.cookies()
             payload = {"tag": tag, "cookies": ck}
-            ts = int(time.time())
+            ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
             fname = os.path.join(cookies_dir, f"cookies_{tag}_{ts}.json")
             with open(fname, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
@@ -312,95 +366,10 @@ def sample_target_with_playwright(
         except Exception as exc:
             _log(f"save cookies failed: {exc}")
 
-    def _save_cookie_http(
-        headers: Dict[str, Any],
-        body: str,
-        url: str,
-        status_code: int,
-        tag: str,
-        method: str = "GET",
-        request_headers: Optional[Any] = None,
-        request_body: Optional[Any] = None,
-    ):
-        try:
-            _ensure_log()
-            import os
-            import time
-            from urllib.parse import urlparse
-
-            _log(
-                f"save cookie http begin tag={tag} url={url} status={status_code} method={method}"
-            )
-
-            # normalize request headers to iterable of (k, v)
-            req_header_items = []
-            try:
-                if request_headers:
-                    if hasattr(request_headers, "items"):
-                        req_header_items = list(request_headers.items())
-                    elif isinstance(request_headers, list):
-                        req_header_items = request_headers
-            except Exception:
-                req_header_items = []
-
-            # normalize request body to str
-            req_body_str = None
-            if request_body is not None:
-                if isinstance(request_body, (bytes, bytearray)):
-                    try:
-                        req_body_str = request_body.decode("utf-8", errors="replace")
-                    except Exception:
-                        req_body_str = str(request_body)
-                else:
-                    req_body_str = str(request_body)
-
-            cookies_dir = getattr(SETTINGS, "cookie_dir", "/home/li/LLM_POC/PoCGen/cookie")
-            os.makedirs(cookies_dir, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-            fname = os.path.join(cookies_dir, f"{ts}-cookie.http")
-
-            parsed = urlparse(url)
-            path_q = parsed.path or "/"
-            if parsed.query:
-                path_q += f"?{parsed.query}"
-
-            lines = []
-            # Request section
-            lines.append(f"{method.upper()} {path_q} HTTP/1.1")
-            host_line_added = False
-            if parsed.netloc:
-                lines.append(f"Host: {parsed.netloc}")
-                host_line_added = True
-            for k, v in req_header_items:
-                if k.lower() == "host":
-                    if host_line_added:
-                        continue
-                    host_line_added = True
-                lines.append(f"{k}: {v}")
-            lines.append("")
-
-            # Request body
-            if req_body_str:
-                lines.append(req_body_str)
-            lines.append("")
-
-            # Response section
-            lines.append(f"HTTP/1.1 {status_code}")
-            for k, v in headers.items():
-                lines.append(f"{k}: {v}")
-            lines.append("")
-            lines.append(body or "")
-            content = "\n".join(lines)
-
-            with open(fname, "w", encoding="utf-8") as fh:
-                fh.write(content)
-            _log(f"saved cookie http to {fname}")
-        except Exception as exc:
-            _log(f"save cookie http failed: {exc}")
-
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless_flag)
         context = browser.new_context()
+        _setup_network_logging(context, tag="login_flow")
         page = context.new_page()
 
         def _sample_value(name: str, input_type: str) -> str:
@@ -409,13 +378,12 @@ def sample_target_with_playwright(
                 return login_password or "admin"
             if "user" in lname or "login" in lname:
                 return login_username or "admin"
-            return "test123"
 
         _log(f"open {login_page}")
         page.goto(login_page, wait_until="networkidle", timeout=5000)
 
         user_field, pass_field, candidates = _detect_form_fields(page)
-        _log(f"detected fields user='{user_field}' pass='{pass_field}' candidates={candidates}")
+        _log(f"静态规则初匹配： user='{user_field}' pass='{pass_field}' candidates={candidates}")
 
         orig_user_field, orig_pass_field = user_field, pass_field
 
@@ -549,63 +517,6 @@ def sample_target_with_playwright(
             except Exception:
                 pass
 
-        def _submit_post_form(page):
-            try:
-                forms = page.query_selector_all("form")
-                _log(f"post-login forms found: {len(forms)}")
-                for f_idx, form in enumerate(forms):
-                    try:
-                        method = (form.get_attribute("method") or "get").lower()
-                        if method != "post":
-                            continue
-                        inputs = form.query_selector_all("input, textarea")
-                        filled = []
-                        for inp in inputs:
-                            try:
-                                if not inp.is_visible() or not inp.is_enabled():
-                                    continue
-                                itype = (inp.get_attribute("type") or "text").lower()
-                                if itype in {"hidden", "submit", "button", "file"}:
-                                    continue
-                                name = inp.get_attribute("name") or ""
-                                val = _sample_value(name, itype)
-                                inp.fill(val, timeout=5000)
-                                filled.append(f"{name or '<noname>'}={val}")
-                            except Exception:
-                                continue
-
-                        _log(f"form[{f_idx}] method=POST filled={filled}")
-
-                        submit_btn = form.query_selector("button[type='submit'], input[type='submit'], button:not([type])")
-                        if submit_btn and submit_btn.is_visible():
-                            submit_btn.click(timeout=5000)
-                            _log(f"form[{f_idx}] clicked submit button")
-                        else:
-                            form.evaluate("form => form.submit()")
-                            _log(f"form[{f_idx}] submit() fallback")
-
-                        post_resp = None
-                        try:
-                            post_resp = context.wait_for_event(
-                                "response",
-                                predicate=lambda r: r.request.method.upper() == "POST",
-                                timeout=10000,
-                            )
-                            _log(f"form[{f_idx}] got POST response status={post_resp.status}")
-                        except Exception as exc:
-                            _log(f"form[{f_idx}] wait_for_response failed: {exc}")
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=8000)
-                        except Exception:
-                            pass
-                        return post_resp
-                    except Exception as exc:
-                        _log(f"form[{f_idx}] handling failed: {exc}")
-                return None
-            except Exception as exc:
-                _log(f"form scanning failed: {exc}")
-                return None
-
         # if target differs from current page, navigate; otherwise stay on post-login page
         from urllib.parse import urlparse
 
@@ -650,191 +561,10 @@ def sample_target_with_playwright(
             _save_cookies(context, "post_login")
         except Exception:
             pass
-
-        # Post-login action: let LLM choose a visible button to click once (if any)
-        try:
-            buttons_info_post = _extract_buttons(page)
-            visible_btns = [b for b in buttons_info_post if b.get("index") is not None]
-            if visible_btns:
-                action_choice = _llm_pick_action_button(visible_btns)
-                if action_choice:
-                    idx_sel = action_choice.get("button_index")
-                    if idx_sel is not None and 0 <= idx_sel < len(buttons_info_post):
-                        nodes = page.query_selector_all("button, input[type='button'], input[type='submit'], a[role='button']")
-                        if idx_sel < len(nodes):
-                            btn = nodes[idx_sel]
-                            if btn.is_visible():
-                                btn.click(timeout=5000)
-                                _log(
-                                    f"post-login LLM clicked button idx={idx_sel} label='{(btn.inner_text() or btn.get_attribute('value') or '').strip()}'"
-                                )
-                                try:
-                                    page.wait_for_load_state("networkidle", timeout=10000)
-                                except Exception:
-                                    pass
-                                try:
-                                    page.wait_for_selector("form, button, input, body", timeout=8000)
-                                except Exception:
-                                    _log("post-click wait_for_selector timeout; continuing")
-                                try:
-                                    page.wait_for_timeout(1500)
-                                except Exception:
-                                    pass
-        except Exception as exc:
-            _log(f"post-login action button handling failed: {exc}")
-
-        # LLM-assisted post-login form submission
-        forms_info_post = _extract_forms(page)
-        llm_post = _llm_pick_post_form(forms_info_post, login_username, login_password)
-        post_resp = None
-        submission_info = None
-        if llm_post:
-            try:
-                chosen_idx = llm_post.get("form_index")
-                values: Dict[str, str] = llm_post.get("field_values", {}) or {}
-                _log(f"LLM post form selection form_index={chosen_idx} values={values}")
-                forms = page.query_selector_all("form")
-                if chosen_idx is not None and 0 <= chosen_idx < len(forms):
-                    form = forms[chosen_idx]
-                    inputs = form.query_selector_all("input, textarea")
-                    filled = []
-                    data_dict: Dict[str, str] = {}
-                    for inp in inputs:
-                        try:
-                            if not inp.is_visible() or not inp.is_enabled():
-                                continue
-                            itype = (inp.get_attribute("type") or "text").lower()
-                            name = inp.get_attribute("name") or ""
-                            if itype in {"hidden", "submit", "button", "file"}:
-                                continue
-                            if name in values:
-                                val = values[name]
-                            else:
-                                val = _sample_value(name, itype)
-                            inp.fill(val, timeout=5000)
-                            data_dict[name or "<noname>"] = val
-                            filled.append(f"{name or '<noname>'}={val}")
-                        except Exception:
-                            continue
-                    _log(f"LLM form[{chosen_idx}] filled={filled}")
-                    action = form.get_attribute("action") or page.url
-                    form_url = urljoin(page.url, action)
-                    submission_info = {"url": form_url, "data": data_dict}
-                    submit_btn = form.query_selector("button[type='submit'], input[type='submit'], button:not([type])")
-                    if submit_btn and submit_btn.is_visible():
-                        submit_btn.click(timeout=5000)
-                        _log(f"LLM form[{chosen_idx}] clicked submit")
-                    else:
-                        form.evaluate("form => form.submit()")
-                        _log(f"LLM form[{chosen_idx}] submit() fallback")
-                    try:
-                        for _ in range(2):
-                            post_resp = context.wait_for_event(
-                                "response",
-                                predicate=lambda r: r.request.method.upper() == "POST",
-                                timeout=15000,
-                            )
-                            if post_resp:
-                                break
-                        if post_resp:
-                            _log(f"LLM form[{chosen_idx}] got POST response status={post_resp.status}")
-                    except Exception as exc:
-                        _log(f"LLM form[{chosen_idx}] wait_for_response failed: {exc}")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=8000)
-                    except Exception:
-                        pass
-            except Exception as exc:
-                _log(f"LLM post form handling failed: {exc}")
-
-        if post_resp is None:
-            post_resp, submission_info = _submit_post_form(page)
-
-        html = None
-        status_code = 0
-        headers = {}
-
-        if post_resp is not None:
-            try:
-                html = post_resp.text()
-            except Exception as exc:
-                _log(f"read POST body failed: {exc}")
-                try:
-                    raw = post_resp.body()
-                    # best-effort decode
-                    ctype = (post_resp.headers or {}).get("content-type", "")
-                    encoding = "utf-8"
-                    if "charset=" in ctype:
-                        encoding = ctype.split("charset=")[-1].split(";")[0].strip()
-                    html = raw.decode(encoding, errors="replace") if raw is not None else None
-                    _log(f"read POST body via .body() with encoding={encoding}")
-                except Exception as exc2:
-                    _log(f"read POST body via .body() failed: {exc2}")
-            status_code = post_resp.status or 0
-            headers = post_resp.headers or {}
-            _log(f"post response status={status_code} headers={list(headers.keys()) if headers else []}")
-
-        # httpx replay fallback if no post_resp or body missing
-        if html is None and submission_info:
-            replay = _httpx_replay_post(submission_info, context)
-            if replay is not None:
-                try:
-                    html = replay.text
-                except Exception as exc:
-                    _log(f"httpx replay read text failed: {exc}")
-                status_code = status_code or replay.status_code
-                headers = headers or dict(replay.headers)
-
-        if html is None:
-            html = page.content()
-        if not status_code:
-            status_code = resp.status if resp else 0
-        if not headers:
-            headers = resp.headers if resp else {}
+        html = page.content()
+        status_code = resp.status if resp else 0
+        headers = resp.headers if resp else {}
         _log(f"target status={status_code} headers={list(headers.keys()) if headers else []}")
-
-        try:
-            http_method = "GET"
-            req_headers = None
-            req_body = None
-            try:
-                if post_resp:
-                    http_method = post_resp.request.method
-                    try:
-                        req_headers = post_resp.request.headers
-                    except Exception:
-                        req_headers = None
-                    try:
-                        req_body = post_resp.request.post_data
-                    except Exception:
-                        req_body = None
-                elif resp:
-                    http_method = resp.request.method
-                    try:
-                        req_headers = resp.request.headers
-                    except Exception:
-                        req_headers = None
-                    try:
-                        req_body = resp.request.post_data
-                    except Exception:
-                        req_body = None
-            except Exception:
-                http_method = "GET"
-            _log(
-                f"calling _save_cookie_http method={http_method} status={status_code} url={target}"
-            )
-            _save_cookie_http(
-                headers or {},
-                html or "",
-                target,
-                status_code or 0,
-                "final",
-                method=http_method,
-                request_headers=req_headers,
-                request_body=req_body,
-            )
-        except Exception as exc:
-            _log(f"save_cookie_http outer failed: {exc}")
 
         browser.close()
 

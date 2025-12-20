@@ -29,7 +29,6 @@ def main() -> None:
     parser.add_argument("--login-password", default=None, help="可选，登录密码")
     parser.add_argument("--login-user-field", default="username", help="登录表单用户名字段名，默认 username")
     parser.add_argument("--login-pass-field", default="password", help="登录表单密码字段名，默认 password")
-    parser.add_argument("--login-method", default="post", help="登录 HTTP 方法，默认 post")
     parser.add_argument("--browser-login", action="store_true", help="使用 Playwright 浏览器登录以获取 cookie 后再验证")
     parser.add_argument("--browser-headful", action="store_true", help="浏览器登录时显示界面（headful），默认无头模式")
     args = parser.parse_args()
@@ -60,7 +59,6 @@ def main() -> None:
         login_password=args.login_password,
         login_user_field=args.login_user_field,
         login_pass_field=args.login_pass_field,
-        login_method=args.login_method,
         use_browser_login=args.browser_login,
         browser_headless=None if not args.browser_headful else False,
     )

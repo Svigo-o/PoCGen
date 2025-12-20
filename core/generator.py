@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-import os
-import time
 from typing import Dict, List, Optional, Type
 
 from rich.console import Console
@@ -9,9 +6,7 @@ from rich.console import Console
 from PoCGen.config.config import SETTINGS
 from PoCGen.llm.client import ChatMessage, LLMClient
 from PoCGen.prompts.templates import build_prompt_command_injection_http
-from PoCGen.core.auth import login_http, login_playwright
-from PoCGen.core.sampler import sample_target, sample_target_with_playwright
-from PoCGen.core.target_profile import TargetSample, sample_to_prompt_block
+from PoCGen.core.sampler import sample_target_with_playwright
 from PoCGen.core.attacker_monitor import AttackerMonitor
 from PoCGen.core.remote_validator import validate_http_requests
 from .models import (
@@ -81,7 +76,6 @@ def generate_poc(
     login_password: Optional[str] = None,
     login_user_field: str = "username",
     login_pass_field: str = "password",
-    login_method: str = "post",
     use_browser_login: bool = False,
     browser_headless: Optional[bool] = None,
 ) -> GenerationResult:
@@ -111,39 +105,11 @@ def generate_poc(
         if not monitor_running:
             console.print("[yellow]Warning: attacker monitor failed to start; success detection will be disabled for this run")
 
-    login_session = None
     try:
-        if auto_validate and target and (login_url or login_username is not None or login_password is not None):
-            try:
-                if use_browser_login:
-                    login_session = login_playwright(
-                        target,
-                        login_url,
-                        login_username,
-                        login_password,
-                        login_user_field,
-                        login_pass_field,
-                        browser_headless,
-                    )
-                else:
-                    login_session = login_http(
-                        target,
-                        login_url,
-                        login_username,
-                        login_password,
-                        login_user_field,
-                        login_pass_field,
-                        login_method,
-                    )
-                if login_session:
-                    console.print("[green]Login session established; validation will reuse authenticated cookies")
-            except Exception as exc:
-                console.print(f"[yellow]Warning: login attempt failed ({exc}); continuing without session")
-
         target_profile_block: Optional[str] = None
         if probe_target and target:
-            try:
-                if use_browser_login:
+            if use_browser_login:
+                try:
                     sample = sample_target_with_playwright(
                         target,
                         login_url=login_url,
@@ -153,16 +119,11 @@ def generate_poc(
                         login_pass_field=login_pass_field,
                         headless=browser_headless,
                     )
-                else:
-                    sample = sample_target(target, timeout=SETTINGS.sample_timeout, session=login_session)
-
-                target_profile_block = sample_to_prompt_block(sample)
-                console.print(f"[green]Collected target sample from {sample.url} (HTTP {sample.status_code})")
-                sample_path = _save_target_sample(sample, SETTINGS.collect_dir)
-                if sample_path:
-                    console.print(f"[green]Saved target sample to {sample_path}")
-            except Exception as exc:
-                console.print(f"[yellow]Warning: failed to probe target {target}: {exc}")
+                    target_profile_block = sample.as_prompt_block()
+                except Exception as exc:
+                    console.print(f"[yellow]Warning: failed to probe target {target}: {exc}")
+            else:
+                console.print("[yellow]probe_target currently requires --browser-login; skipping target sampling")
 
         for attempt_index in range(max_iters):
             console.print(f"\n[bold]Attempt {attempt_index + 1}/{max_iters}[/bold]")
@@ -214,7 +175,7 @@ def generate_poc(
             validation_results: Optional[List[ValidationResult]] = None
             if auto_validate and target and requests:
                 try:
-                    validation_results = validate_http_requests(requests, target, session=login_session)
+                    validation_results = validate_http_requests(requests, target)
                     for res in validation_results:
                         if res.success:
                             console.print(
@@ -291,32 +252,8 @@ def generate_poc(
             success=overall_success,
         )
     finally:
-        if login_session:
-            try:
-                login_session.close()
-            except Exception:
-                pass
         if monitor:
             monitor.stop()
-def _save_target_sample(sample: TargetSample, directory: str) -> Optional[str]:
-    try:
-        os.makedirs(directory, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        fname = f"sample_{timestamp}.txt"
-        path = os.path.join(directory, fname)
-        counter = 1
-        while os.path.exists(path):
-            fname = f"sample_{timestamp}_{counter}.txt"
-            path = os.path.join(directory, fname)
-            counter += 1
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(sample.as_prompt_block())
-        return path
-    except Exception as exc:
-        console.print(f"[yellow]Warning: failed to persist target sample: {exc}")
-        return None
-
-
 def _build_attempt_feedback(
     parse_issues: List[str],
     validation_results: Optional[List[ValidationResult]],

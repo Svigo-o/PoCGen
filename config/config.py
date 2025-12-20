@@ -74,7 +74,6 @@ class AppSettings(BaseModel):
     cookie_dir: str = Field(default=os.getenv("POCGEN_COOKIE_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "cookie")))
     default_vuln_type: str = Field(default=os.getenv("POCGEN_VULN_TYPE", "command_injection_http"))
     attacker_url: str = Field(default=os.getenv("POCGEN_ATTACKER_URL", "http://192.168.6.1:6666/testpoc"))
-    bridge_url: str | None = Field(default=os.getenv("POCGEN_BRIDGE_URL", "http://127.0.0.1:7002"))
     http_proxy: str | None = Field(default=os.getenv("POCGEN_HTTP_PROXY"))
     sample_timeout: float = Field(default=float(os.getenv("POCGEN_SAMPLE_TIMEOUT", "8")))
     validation_timeout: float = Field(default=float(os.getenv("POCGEN_VALIDATION_TIMEOUT", "8")))
