@@ -59,7 +59,12 @@ class AttackerMonitor:
         return self._server is not None
 
     def record_hit(self, handler: _MonitorHandler) -> None:
-        summary = f"{handler.command} {handler.path}\n" + "\n".join(f"{k}: {v}" for k, v in handler.headers.items())
+        remote_ip, remote_port = handler.client_address if handler.client_address else ("?", "?")
+        summary = (
+            f"{handler.command} {handler.path}\n"
+            f"Remote: {remote_ip}:{remote_port}\n"
+            + "\n".join(f"{k}: {v}" for k, v in handler.headers.items())
+        )
         self.last_request_summary = summary
         self._event.set()
         console.print(f"[bold green]Attacker monitor received request:[/bold green]\n{summary}")

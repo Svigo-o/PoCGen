@@ -7,6 +7,7 @@ from PoCGen.config.config import SETTINGS
 from PoCGen.llm.client import ChatMessage, LLMClient
 from PoCGen.prompts.templates import build_prompt_command_injection_http
 from PoCGen.core.sampler import sample_target_with_playwright
+from PoCGen.core.target_profile import TargetSample
 from PoCGen.core.attacker_monitor import AttackerMonitor
 from PoCGen.core.remote_validator import validate_http_requests
 from .models import (
@@ -107,6 +108,8 @@ def generate_poc(
 
     try:
         target_profile_block: Optional[str] = None
+        target_sample_data: Optional[TargetSample] = None
+        sample_cookies_header: Optional[str] = None
         if probe_target and target:
             if use_browser_login:
                 try:
@@ -119,7 +122,9 @@ def generate_poc(
                         login_pass_field=login_pass_field,
                         headless=browser_headless,
                     )
+                    target_sample_data = sample
                     target_profile_block = sample.as_prompt_block()
+                    sample_cookies_header = sample.cookies_header
                 except Exception as exc:
                     console.print(f"[yellow]Warning: failed to probe target {target}: {exc}")
             else:
@@ -174,6 +179,11 @@ def generate_poc(
 
             validation_results: Optional[List[ValidationResult]] = None
             if auto_validate and target and requests:
+                # If sampler captured cookies, inject them into requests lacking Cookie header to improve validation fidelity.
+                if sample_cookies_header:
+                    for req in requests:
+                        if "Cookie" not in req.headers:
+                            req.headers["Cookie"] = sample_cookies_header
                 try:
                     validation_results = validate_http_requests(requests, target)
                     for res in validation_results:

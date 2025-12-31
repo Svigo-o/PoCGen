@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 
 @dataclass
@@ -13,14 +13,23 @@ class TargetSample:
     body_preview: str
     request_template: str
     response_headers: str
+    post_samples: List[str] = field(default_factory=list)
+    cookies_header: Optional[str] = None
 
     def as_prompt_block(self) -> str:
         ct = self.content_type or "unknown"
         enc = self.encoding or "unknown"
-        return (
-            "Sample Target HTTP Interaction:\n"
-            f"Request template used to reach target:\n{self.request_template}\n"
-            f"Response status: HTTP {self.status_code}\n"
-            f"Response headers (truncated):\n{self.response_headers}\n"
-            f"Body preview (truncated):\n{self.body_preview}\n"
-        )
+        parts = [
+            "Sample Target HTTP Interaction:\n",
+            f"Request template used to reach target:\n{self.request_template}\n",
+            f"Response status: HTTP {self.status_code}\n",
+            f"Response headers (truncated):\n{self.response_headers}\n",
+            f"Body preview (truncated):\n{self.body_preview}\n",
+        ]
+        if self.post_samples:
+            # Include the first captured POST request (full raw HTTP) to guide the LLM.
+            first = self.post_samples[0]
+            parts.append("Captured POST sample (raw HTTP):\n" + first + "\n")
+        if self.cookies_header:
+            parts.append("Captured cookies (set as Cookie header):\n" + self.cookies_header + "\n")
+        return "".join(parts)

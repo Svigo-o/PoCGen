@@ -25,7 +25,7 @@ class ProviderSettings(BaseModel):
 class LLMSettings(BaseModel):
     timeout_seconds: int = Field(default=int(os.getenv("POCGEN_TIMEOUT", "60")))
     providers: Dict[str, ProviderSettings] = Field(default_factory=dict)
-    default_provider: str = Field(default=os.getenv("POCGEN_DEFAULT_PROVIDER", "qwen"))
+    default_provider: str = Field(default=os.getenv("POCGEN_DEFAULT_PROVIDER", "deepseek"))
 
     @model_validator(mode="before")
     def populate_providers(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -49,7 +49,7 @@ class LLMSettings(BaseModel):
             normalized[key.lower()] = cfg_model
         values["providers"] = normalized
         if "default_provider" not in values:
-            values["default_provider"] = os.getenv("POCGEN_DEFAULT_PROVIDER", "qwen")
+            values["default_provider"] = os.getenv("POCGEN_DEFAULT_PROVIDER", "deepseek")
         return values
 
     @model_validator(mode="after")

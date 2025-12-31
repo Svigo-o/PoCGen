@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--stop-on-success", dest="stop_on_success", action="store_true", help="监测到 wget 回调后立即停止后续尝试")
     parser.add_argument("--no-stop-on-success", dest="stop_on_success", action="store_false", help="即便检测到 wget 回调也继续剩余尝试")
     parser.set_defaults(stop_on_success=None)
-    parser.add_argument("--login-url", default=None, help="可选，登录请求的完整 URL，缺省时使用 target + /login")
+    parser.add_argument("--login-url", default=None, help="可选，登录请求的完整 URL，缺省时使用 target")
     parser.add_argument("--login-username", default=None, help="可选，登录用户名，缺省不传；若仅给密码，则用户名为空字符串")
     parser.add_argument("--login-password", default=None, help="可选，登录密码")
     parser.add_argument("--login-user-field", default="username", help="登录表单用户名字段名，默认 username")

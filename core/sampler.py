@@ -51,7 +51,7 @@ def _ensure_request_dir():
         pass
 
 
-def _setup_network_logging(context, tag: str = "login"):
+def _setup_network_logging(context, tag: str = "login", collector: Optional[List[str]] = None):
     """Attach Playwright listeners to dump POST request raw payloads.
 
     Only outgoing POST requests are captured,并以标准 HTTP 报文格式写入：
@@ -115,6 +115,8 @@ def _setup_network_logging(context, tag: str = "login"):
 
             with open(fname, "w", encoding="utf-8", errors="replace") as fh:
                 fh.write(content)
+            if collector is not None:
+                collector.append(content)
             _log(f"network log saved {fname} method=POST url={request.url}")
         except Exception as exc:
             _log(f"network log request hook failed: {exc}")
@@ -345,7 +347,7 @@ def sample_target_with_playwright(
         )
         return _ask_llm(prompt, expected_keys=["button_index"])
 
-    def _save_cookies(context, tag: str):
+    def _save_cookies(context, tag: str) -> Optional[str]:
         try:
             _ensure_log()
             import os
@@ -363,13 +365,26 @@ def sample_target_with_playwright(
             with open(fname, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
             _log(f"saved cookies to {fname}")
+            # Build a simple Cookie header string for reuse in prompts/validation.
+            pairs = []
+            for item in ck or []:
+                name = item.get("name")
+                value = item.get("value")
+                if name is None or value is None:
+                    continue
+                pairs.append(f"{name}={value}")
+            return "; ".join(pairs) if pairs else None
         except Exception as exc:
             _log(f"save cookies failed: {exc}")
+            return None
+
+    captured_posts: List[str] = []
+    captured_cookie_header: Optional[str] = None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless_flag)
         context = browser.new_context()
-        _setup_network_logging(context, tag="login_flow")
+        _setup_network_logging(context, tag="login_flow", collector=captured_posts)
         page = context.new_page()
 
         def _sample_value(name: str, input_type: str) -> str:
@@ -558,9 +573,9 @@ def sample_target_with_playwright(
             page.wait_for_timeout(1500)
 
         try:
-            _save_cookies(context, "post_login")
+            captured_cookie_header = _save_cookies(context, "post_login")
         except Exception:
-            pass
+            captured_cookie_header = None
         html = page.content()
         status_code = resp.status if resp else 0
         headers = resp.headers if resp else {}
@@ -598,4 +613,6 @@ def sample_target_with_playwright(
         body_preview=preview,
         request_template=request_template,
         response_headers=headers_str,
+        post_samples=captured_posts,
+        cookies_header=captured_cookie_header,
     )

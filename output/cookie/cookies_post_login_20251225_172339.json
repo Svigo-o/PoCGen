@@ -1,0 +1,15 @@
+{
+  "tag": "post_login",
+  "cookies": [
+    {
+      "name": "session",
+      "value": "231139192",
+      "domain": "192.168.6.2",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ]
+}
