@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import argparse
+import json
 import threading
+import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Optional, Tuple
+from urllib.parse import urlparse, urlunparse, parse_qs
+
+import httpx
 
 from rich.console import Console
 
@@ -14,6 +20,11 @@ class _MonitorHandler(BaseHTTPRequestHandler):
     server_version = "PoCGenAttackerMonitor/1.0"
 
     def do_GET(self):
+        # Status probe endpoint for external processes to reuse the same monitor.
+        if self.path.startswith("/_status"):
+            self.server.parent.handle_status(self)
+            return
+
         self.server.parent.record_hit(self)
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -60,7 +71,9 @@ class AttackerMonitor:
 
     def record_hit(self, handler: _MonitorHandler) -> None:
         remote_ip, remote_port = handler.client_address if handler.client_address else ("?", "?")
+        ts = datetime.now().isoformat()
         summary = (
+            f"\nTime: {ts}\n"
             f"{handler.command} {handler.path}\n"
             f"Remote: {remote_ip}:{remote_port}\n"
             + "\n".join(f"{k}: {v}" for k, v in handler.headers.items())
@@ -68,6 +81,28 @@ class AttackerMonitor:
         self.last_request_summary = summary
         self._event.set()
         console.print(f"[bold green]Attacker monitor received request:[/bold green]\n{summary}")
+
+    def handle_status(self, handler: _MonitorHandler) -> None:
+        # Expose hit state over HTTP so other processes can reuse an existing monitor.
+        parsed = urlparse(handler.path)
+        params = parse_qs(parsed.query)
+        clear = params.get("clear", ["0"])[0] in {"1", "true", "yes"}
+        hit = self._event.is_set()
+        body = json.dumps(
+            {
+                "ok": True,
+                "hit": hit,
+                "summary": self.last_request_summary or "",
+            }
+        ).encode("utf-8")
+        if clear and hit:
+            self._event.clear()
+
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
 
     def wait_for_hit(self, timeout: Optional[float] = None) -> bool:
         if not self._server:
@@ -90,4 +125,71 @@ class AttackerMonitor:
         self._event.clear()
 
 
-__all__ = ["AttackerMonitor"]
+def _status_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    path = "/_status"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return urlunparse((parsed.scheme, f"{parsed.hostname}:{port}", path, "", "", ""))
+
+
+def monitor_available(url: str, timeout: float = 1.0) -> bool:
+    """Check if a monitor is already running at the given URL."""
+    status_url = _status_url(url)
+    try:
+        resp = httpx.get(status_url, timeout=timeout, verify=False)
+        return resp.status_code == 200 and resp.json().get("ok") is True
+    except Exception:
+        return False
+
+
+def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1.0) -> Tuple[bool, Optional[str]]:
+    """Poll an already-running monitor for a hit within timeout."""
+    status_url = _status_url(url)
+    deadline = time.time() + timeout
+    last_summary: Optional[str] = None
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(status_url, params={"clear": "1"}, timeout=timeout, verify=False)
+            if resp.status_code == 200:
+                data = resp.json()
+                last_summary = data.get("summary") or None
+                if data.get("hit"):
+                    return True, last_summary
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return False, last_summary
+
+
+__all__ = [
+    "AttackerMonitor",
+    "monitor_available",
+    "wait_for_external_monitor",
+]
+
+
+def _cli():
+    parser = argparse.ArgumentParser(description="Run a standalone attacker monitor HTTP server")
+    parser.add_argument("--url", default="http://0.0.0.0:6666", help="Listen URL, e.g., http://0.0.0.0:6666")
+    parser.add_argument("--timeout", type=float, default=3600.0, help="Idle timeout used only for wait_for_hit (not shutdown)")
+    args = parser.parse_args()
+
+    monitor = AttackerMonitor(args.url, timeout=args.timeout)
+    monitor.start()
+    if not monitor.is_running():
+        console.print("[red]Monitor failed to start. Check bind address/port permissions.[/red]")
+        return
+
+    try:
+        console.print("[cyan]Press Ctrl+C to stop the monitor[/cyan]")
+        # Keep the main thread alive while the HTTP server runs in background thread.
+        while True:
+            threading.Event().wait(3600)
+    except KeyboardInterrupt:
+        console.print("[yellow]Stopping monitor...[/yellow]")
+    finally:
+        monitor.stop()
+
+
+if __name__ == "__main__":
+    _cli()

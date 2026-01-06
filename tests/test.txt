@@ -1,0 +1,5 @@
+python3 -m PoCGen.cli   --desc /home/li/LLM_POC/vul_func_desc_poc/CVE-2025-9149/vulcode_description.txt   --code /home/li/LLM_POC/vul_func_desc_poc/CVE-2025-9149/相关函数/*.c   --target http://192.168.6.2   --probe-target --browser-login --login-url http://192.168.6.2   --login-username admin --login-password admin --auto-validate --max-iters 5
+
+python3 -m PoCGen.cli   --desc /home/li/LLM_POC/vul_func_desc_poc/CVE-2019-20760/vulcode_description.txt   --code /home/li/LLM_POC/vul_func_desc_poc/CVE-2019-20760/相关函数/*.c   --target http://192.168.6.2   --probe-target --browser-login --login-url http://192.168.6.2   --login-username admin --login-password admin --auto-validate --max-iters 5
+
+python3 -m PoCGen.cli   --desc /home/li/LLM_POC/vul_func_desc_poc/CVE-2023-39618/vulcode_description.txt   --code /home/li/LLM_POC/vul_func_desc_poc/CVE-2023-39618/相关函数/*.c   --target http://192.168.6.2   --probe-target --browser-login --login-url http://192.168.6.2   --login-username admin --login-password admin --auto-validate --max-iters 5

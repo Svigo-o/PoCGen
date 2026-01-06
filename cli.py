@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--code", nargs="+", required=True, help="One or more code file paths or globs")
     parser.add_argument("--target", help="Optional target base URL")
     parser.add_argument("--vuln-type", default="command_injection_http", help="Vulnerability type handler key")
-    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--temperature", type=float, default=0.1, help="LLM generation temperature")
     parser.add_argument("--max-tokens", type=int, default=65535)
     parser.add_argument("--attacker", default=None, help="攻击机 URL（用于 wget 取回 net.sh），默认从配置 POCGEN_ATTACKER_URL 读取")
     parser.add_argument("--probe-target", action="store_true", help="在生成前主动访问 target，采集响应样本并提供给 LLM")

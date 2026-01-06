@@ -313,6 +313,7 @@ def sample_target_with_playwright(
     def _ask_llm(prompt: str, expected_keys: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         try:
             client = LLMClient()
+            # LLM input: single user prompt to guide Playwright login/button selection
             resp = client.chat([ChatMessage(role="user", content=prompt)], temperature=0, max_tokens=800)
             client.close()
             _log(f"llm raw reply: {resp[:500]}")

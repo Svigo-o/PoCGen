@@ -34,4 +34,4 @@ test-results/
 
 # ----- Project outputs -----
 # Ignore generated PoC output files
-outputs/
+output/

