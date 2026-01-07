@@ -53,6 +53,7 @@ class AttackerMonitor:
         self._thread: Optional[threading.Thread] = None
         self._event = threading.Event()
         self.last_request_summary: Optional[str] = None
+        self.last_hit_ts: Optional[float] = None
 
     def start(self) -> None:
         try:
@@ -71,9 +72,10 @@ class AttackerMonitor:
 
     def record_hit(self, handler: _MonitorHandler) -> None:
         remote_ip, remote_port = handler.client_address if handler.client_address else ("?", "?")
-        ts = datetime.now().isoformat()
+        self.last_hit_ts = time.time()
+        ts_iso = datetime.fromtimestamp(self.last_hit_ts).isoformat()
         summary = (
-            f"\nTime: {ts}\n"
+            f"Time: {ts_iso}\n"
             f"{handler.command} {handler.path}\n"
             f"Remote: {remote_ip}:{remote_port}\n"
             + "\n".join(f"{k}: {v}" for k, v in handler.headers.items())
@@ -92,11 +94,14 @@ class AttackerMonitor:
             {
                 "ok": True,
                 "hit": hit,
+                "hit_time": self.last_hit_ts or 0,
                 "summary": self.last_request_summary or "",
             }
         ).encode("utf-8")
-        if clear and hit:
+        if clear:
             self._event.clear()
+            self.last_request_summary = None
+            self.last_hit_ts = None
 
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -142,8 +147,18 @@ def monitor_available(url: str, timeout: float = 1.0) -> bool:
         return False
 
 
-def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1.0) -> Tuple[bool, Optional[str]]:
-    """Poll an already-running monitor for a hit within timeout."""
+def reset_external_monitor(url: str, timeout: float = 1.0) -> bool:
+    """Clear any prior hit state on an existing monitor."""
+    status_url = _status_url(url)
+    try:
+        resp = httpx.get(status_url, params={"clear": "1"}, timeout=timeout, verify=False)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1.0, since_ts: Optional[float] = None) -> Tuple[bool, Optional[str]]:
+    """Poll an already-running monitor for a hit within timeout, optionally only after since_ts (epoch seconds)."""
     status_url = _status_url(url)
     deadline = time.time() + timeout
     last_summary: Optional[str] = None
@@ -153,7 +168,8 @@ def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1
             if resp.status_code == 200:
                 data = resp.json()
                 last_summary = data.get("summary") or None
-                if data.get("hit"):
+                hit_time = data.get("hit_time") or 0
+                if data.get("hit") and (since_ts is None or hit_time >= since_ts):
                     return True, last_summary
         except Exception:
             pass
@@ -164,6 +180,7 @@ def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1
 __all__ = [
     "AttackerMonitor",
     "monitor_available",
+    "reset_external_monitor",
     "wait_for_external_monitor",
 ]
 

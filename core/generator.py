@@ -10,7 +10,8 @@ from PoCGen.llm.client import ChatMessage, LLMClient
 from PoCGen.prompts.templates import build_prompt_command_injection_http
 from PoCGen.core.sampler import sample_target_with_playwright
 from PoCGen.core.target_profile import TargetSample
-from PoCGen.core.attacker_monitor import AttackerMonitor, monitor_available, wait_for_external_monitor
+from PoCGen.core.attacker_monitor import AttackerMonitor, monitor_available, reset_external_monitor, wait_for_external_monitor
+import time
 from PoCGen.core.remote_validator import validate_http_requests
 from .models import (
     AttemptResult,
@@ -137,12 +138,16 @@ def generate_poc(
             external_monitor_url = atk_url
             monitor_running = True
             console.print(f"[cyan]Reusing existing attacker monitor at {atk_url}")
+            # Clear any prior hits so only new callbacks for this run are considered.
+            reset_external_monitor(atk_url)
         else:
             monitor = AttackerMonitor(atk_url, timeout=monitor_wait)
             monitor.start()
             monitor_running = monitor.is_running()
             if not monitor_running:
                 console.print("[yellow]Warning: attacker monitor failed to start; success detection will be disabled for this run")
+
+    generation_start_ts = time.time()
 
     try:
         target_profile_block: Optional[str] = None
@@ -259,7 +264,9 @@ def generate_poc(
             monitor_summary: Optional[str] = None
             if monitor_running and requests:
                 if external_monitor_url:
-                    monitor_hit, monitor_summary = wait_for_external_monitor(external_monitor_url, monitor_wait)
+                    monitor_hit, monitor_summary = wait_for_external_monitor(
+                        external_monitor_url, monitor_wait, since_ts=generation_start_ts
+                    )
                 else:
                     monitor_hit = monitor.wait_for_hit(monitor_wait)
                     monitor_summary = monitor.last_request_summary
