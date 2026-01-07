@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--login-pass-field", default="password", help="登录表单密码字段名，默认 password")
     parser.add_argument("--browser-login", action="store_true", help="使用 Playwright 浏览器登录以获取 cookie 后再验证")
     parser.add_argument("--browser-headful", action="store_true", help="浏览器登录时显示界面（headful），默认无头模式")
+    parser.add_argument("--CVENumber",  default=None, help="浏览器登录时显示界面（headful），默认无头模式")
     args = parser.parse_args()
 
     if args.desc:
@@ -54,6 +55,7 @@ def main() -> None:
         max_iterations=args.max_iters,
         stop_on_success=args.stop_on_success,
         monitor_timeout=args.monitor_timeout,
+        cvenumber=args.CVENumber,
         login_url=args.login_url,
         login_username=args.login_username,
         login_password=args.login_password,

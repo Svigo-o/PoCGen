@@ -13,6 +13,7 @@ from PoCGen.core.target_profile import TargetSample
 from PoCGen.core.attacker_monitor import AttackerMonitor, monitor_available, reset_external_monitor, wait_for_external_monitor
 import time
 from PoCGen.core.remote_validator import validate_http_requests
+from PoCGen.tools.getWeb import  get_web_infomation
 from .models import (
     AttemptResult,
     GenerationResult,
@@ -75,6 +76,7 @@ def generate_poc(
     max_iterations: Optional[int] = None,
     stop_on_success: Optional[bool] = None,
     monitor_timeout: Optional[float] = None,
+    cvenumber:Optional[str] = None,
     login_url: Optional[str] = None,
     login_username: Optional[str] = None,
     login_password: Optional[str] = None,
@@ -85,7 +87,8 @@ def generate_poc(
 ) -> GenerationResult:
     handler = get_handler(vuln_type)
     atk_url = attacker_url or SETTINGS.attacker_url
-
+    if cvenumber:
+       get_web_infomation(cvenumber)
     # Chat logging: one log file per task
     chat_log_dir = Path(__file__).resolve().parent.parent / "logs" / "chat"
     chat_log_dir.mkdir(parents=True, exist_ok=True)
