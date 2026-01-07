@@ -6,3 +6,13 @@ pydantic==2.12.5
 python-dotenv==1.2.1
 requests==2.32.5
 rich==14.2.0
+langchain
+langchain-openai
+beautifulsoup4
+
+# Notes:
+# - langchain_classic不是标准常见包，可能不是在 PyPI 上。先尝试从 PyPI 安装：
+# - pip install langchain-classic langchain_classic
+# - If `langchain_classic` is required by your environment and is not on PyPI, install it from source:
+#   pip install git+https://github.com/<owner>/langchain-classic.git
+

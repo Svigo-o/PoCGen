@@ -1,7 +1,3 @@
-from langchain.tools import tool
-from langchain_classic.agents import AgentExecutor,create_react_agent
-from langchain_classic import hub
-from langchain_openai import ChatOpenAI
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -12,6 +8,21 @@ from datetime import datetime
 import urllib.parse
 from typing import Dict, List, Optional, Any
 import json
+from langchain.tools import tool
+
+# LangChain-related imports are optional; fall back gracefully if unavailable.
+try:
+    from langchain.agents import AgentExecutor, create_react_agent
+    from langchain import hub
+    from langchain_openai import ChatOpenAI
+
+    _HAS_LANGCHAIN = True
+except Exception:
+    AgentExecutor = None
+    create_react_agent = None
+    hub = None
+    ChatOpenAI = None
+    _HAS_LANGCHAIN = False
 
 # 辅助函数 - 必须先定义
 def _extract_nvd_description(soup) -> str:
@@ -566,6 +577,13 @@ def crawl_github(github_url: str) -> str:
 
 
 def get_web_infomation(cve_str:str):
+    if not _HAS_LANGCHAIN:
+        print(
+            "[warning] LangChain optional dependencies missing; skip get_web_infomation()",
+            file=sys.stderr,
+        )
+        return None
+
     # 配置大模型
     base_url = "http://222.20.126.32:30000/v1"  # 您的大模型地址
     api_key = "DeepseekV3.1_32@C402"  # API密钥
