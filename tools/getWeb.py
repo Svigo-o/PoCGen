@@ -1,30 +1,136 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import urllib.parse
+from typing import Any, Dict, List, Optional
+
 import requests
 from bs4 import BeautifulSoup
-import re
-import os
-import sys
-import time
-from datetime import datetime
-import urllib.parse
-from typing import Dict, List, Optional, Any
-import json
 from langchain.tools import tool
+from langchain_classic.agents import AgentExecutor, create_react_agent
+from langchain_classic import hub
+from langchain_openai import ChatOpenAI
 
-# LangChain-related imports are optional; fall back gracefully if unavailable.
-try:
-    from langchain.agents import AgentExecutor, create_react_agent
-    from langchain import hub
-    from langchain_openai import ChatOpenAI
+from PoCGen.config.config import SETTINGS
+from PoCGen.llm.client import ChatMessage, LLMClient
 
-    _HAS_LANGCHAIN = True
-except Exception:
-    AgentExecutor = None
-    create_react_agent = None
-    hub = None
-    ChatOpenAI = None
-    _HAS_LANGCHAIN = False
 
-# 辅助函数 - 必须先定义
+# ============================================================================
+# HTTP Utility Functions
+# ============================================================================
+
+def _http_get_with_retry(
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 15,
+    max_retries: int = 3,
+) -> requests.Response:
+    """Perform HTTP GET with retry logic for transient errors.
+    
+    Retries on network exceptions, 5xx responses and 429 Too Many Requests.
+    Supports proxy configuration via environment variables.
+    
+    Args:
+        url: Target URL to fetch
+        headers: Optional HTTP headers dict
+        timeout: Request timeout in seconds
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        requests.Response object
+        
+    Raises:
+        RuntimeError: If all retries are exhausted
+    """
+    proxies = {
+        k: v
+        for k, v in {
+            "http": os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY"),
+            "https": os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY"),
+        }.items()
+        if v
+    } or None
+
+    if headers is None:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+
+    last_exc: Optional[Exception] = None
+    last_status: Optional[int] = None
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, proxies=proxies)
+            last_status = resp.status_code
+            # Retry on server errors or rate limits
+            if resp.status_code >= 500 or resp.status_code == 429:
+                last_exc = RuntimeError(f"status={resp.status_code}")
+                time.sleep(1 + attempt)
+                continue
+            return resp
+        except Exception as exc:
+            last_exc = exc
+            time.sleep(1 + attempt)
+            continue
+
+    raise RuntimeError(
+        f"GET {url} failed after {max_retries} attempts, "
+        f"last_status={last_status}, error={last_exc}"
+    )
+
+
+# ============================================================================
+# Text Processing Utilities
+# ============================================================================
+
+def _strip_code_fence(text: str) -> str:
+    """Remove surrounding triple-backtick code fences if present."""
+    if not text:
+        return ""
+    m = re.search(r"```(?:\w+)?\s*([\s\S]*?)\s*```", text)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def _extract_json_from_text(text: str) -> Optional[str]:
+    """Extract first valid JSON object from arbitrary text.
+    
+    Uses brace-matching algorithm to find balanced JSON object.
+    
+    Args:
+        text: Input text potentially containing JSON
+        
+    Returns:
+        JSON string if found, None otherwise
+    """
+    if not text:
+        return None
+    s = _strip_code_fence(text)
+    start = s.find('{')
+    if start == -1:
+        return None
+    
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == '{':
+            depth += 1
+        elif s[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
+
+
+# ============================================================================
+# NVD Parser Functions
+# ============================================================================
+
 def _extract_nvd_description(soup) -> str:
     """提取NVD漏洞描述"""
     desc_elements = soup.find_all(['p', 'div'], attrs={
@@ -165,13 +271,154 @@ def _extract_reference_code_blocks(soup) -> List[str]:
     
     return code_blocks
 
+
+# ============================================================================
+# GitHub Content Parsers
+# ============================================================================
+
+def _parse_github_markdown_content(text: str) -> str:
+    """Remove surrounding triple-backtick fences if present and return inner text."""
+    if not text:
+        return ""
+    # extract content inside the first code-fence if present
+    m = re.search(r"```(?:\w+)?\s*([\s\S]*?)\s*```", text)
+    if m:
+        return m.group(1).strip()
+    # otherwise return trimmed text
+    return text.strip()
+
+
+def _extract_json_from_text(text: str) -> Optional[str]:
+    """Try to pull a JSON object substring from arbitrary text.
+
+    Returns the JSON string if found, else None.
+    Uses a simple brace-matching algorithm to find the first balanced object.
+    """
+    if not text:
+        return None
+    s = _strip_code_fence(text)
+    # find first '{'
+    start = s.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == '{':
+            depth += 1
+        elif s[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
+
+
+def _http_get_with_retry(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15, max_retries: int = 3):
+    """Perform an HTTP GET with a limited number of retries for transient errors.
+
+    Retries on network exceptions, 5xx responses and 429 Too Many Requests.
+    Returns the requests.Response object or raises RuntimeError after retries.
+    """
+    # optional proxy support from env (consistent with get_cve_info)
+    proxies = {
+        k: v
+        for k, v in {
+            "http": os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY"),
+            "https": os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY"),
+        }.items()
+        if v
+    } or None
+
+    last_exc: Optional[Exception] = None
+    last_status: Optional[int] = None
+    if headers is None:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, proxies=proxies)
+            last_status = resp.status_code
+            # Retry on server errors or rate limits
+            if resp.status_code >= 500 or resp.status_code == 429:
+                last_exc = RuntimeError(f"status={resp.status_code}")
+                time.sleep(1 + attempt)
+                continue
+            return resp
+        except Exception as exc:  # noqa: PERF203
+            last_exc = exc
+            time.sleep(1 + attempt)
+            continue
+
+    raise RuntimeError(f"GET {url} failed after {max_retries} attempts, last_status={last_status}, error={last_exc}")
+
+
+def _fallback_collect(cve_str: str) -> Dict[str, Any]:
+    """Collect raw fragments (descriptions, code_blocks) from NVD and references.
+
+    Returns a dict: {"descriptions": List[str], "code_blocks": List[str]}.
+    The function intentionally performs minimal processing; consolidation is delegated
+    to the LLM caller.
+    """
+    collected: Dict[str, Any] = {"descriptions": [], "code_blocks": []}
+    try:
+        resp = get_cve_info(cve_str)
+        data = {}
+        try:
+            data = json.loads(resp)
+        except Exception:
+            data = {}
+
+        if isinstance(data, dict):
+            desc = data.get("description") or ""
+            if desc:
+                collected["descriptions"].append(desc)
+            refs = data.get("references") or []
+        else:
+            refs = []
+
+        for r in refs:
+            try:
+                url = r.get("url") if isinstance(r, dict) else r
+                if not url:
+                    continue
+                if 'github.com' in url:
+                    out = crawl_github(url)
+                else:
+                    out = crawl_reference(url)
+                try:
+                    j = json.loads(out)
+                except Exception:
+                    j = {}
+                if isinstance(j, dict) and j.get("success"):
+                    d = j.get("description") or ""
+                    if d:
+                        collected["descriptions"].append(d)
+                    cbs = j.get("code_blocks") or []
+                    for cb in cbs:
+                        if cb and isinstance(cb, str):
+                            collected["code_blocks"].append(cb)
+            except Exception:
+                continue
+
+        return collected
+    except Exception:
+        return collected
+
 def _parse_github_markdown_content(md_content: str, url: str) -> Dict[str, Any]:
-    """解析GitHub Markdown内容"""
+    """解析GitHub Markdown文件内容，提取描述和代码块.
+    
+    Args:
+        md_content: Markdown文件原始内容
+        url: GitHub文件URL（用于日志）
+        
+    Returns:
+        包含description和code_blocks的字典
+    """
     content_info = {
         'description': "",
         'code_blocks': [],
-        'tables': [],
-        'headings': []
     }
     
     lines = md_content.split('\n')
@@ -220,15 +467,15 @@ def _extract_from_github_page(github_url: str) -> Dict[str, Any]:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         }
         
-        response = requests.get(github_url, headers=headers, timeout=10)
+        resp = _http_get_with_retry(github_url, headers=headers, timeout=10, max_retries=3)
         
-        if response.status_code != 200:
+        if resp.status_code != 200:
             return {
-                "description": f"访问GitHub页面失败，状态码: {response.status_code}",
+                "description": f"访问GitHub页面失败，状态码: {resp.status_code}",
                 "code_blocks": []
             }
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(resp.content, 'html.parser')
         content_info = {
             'description': "",
             'code_blocks': []
@@ -309,40 +556,10 @@ def get_cve_info(cve_id: str) -> str:
     detail_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}".strip()
     api_url = f"https://services.nvd.nist.gov/rest/json/cve/2.0/{cve_id}".strip()
 
-    # optional proxy support from env
-    proxies = {
-        k: v
-        for k, v in {
-            "http": os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY"),
-            "https": os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY"),
-        }.items()
-        if v
-    } or None
-
-    def _request(url: str, timeout: int = 15):
-        last_exc: Optional[Exception] = None
-        last_status: Optional[int] = None
-        for _ in range(3):
-            try:
-                resp = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=timeout,
-                    allow_redirects=True,
-                    proxies=proxies,
-                )
-                last_status = resp.status_code
-                if resp.status_code == 200:
-                    return resp
-            except Exception as exc:  # noqa: PERF203
-                last_exc = exc
-            time.sleep(3)
-        raise RuntimeError(f"request failed, status={last_status}, error={last_exc}")
-
     try:
         # Prefer the official JSON API; it is less likely to be blocked by WAF.
         try:
-            api_resp = _request(api_url, timeout=20)
+            api_resp = _http_get_with_retry(api_url, headers=headers, timeout=20, max_retries=3)
             data = api_resp.json()
             vulns = data.get("vulnerabilities") or []
             if vulns:
@@ -386,7 +603,7 @@ def get_cve_info(cve_id: str) -> str:
             # API may rate-limit or block; fall back to HTML page.
             pass
 
-        page_resp = _request(detail_url, timeout=20)
+        page_resp = _http_get_with_retry(detail_url, headers=headers, timeout=20, max_retries=3)
 
         if page_resp.status_code == 404:
             return json.dumps({"error": f"CVE {cve_id} 不存在或在NVD库中未找到"})
@@ -415,9 +632,10 @@ def get_cve_info(cve_id: str) -> str:
 
 @tool
 def save_to_file(input_str: str) -> str:
-    """
-    保存工具。将信息保存到指定文件路径，如果文件不存在，会直接创建。
-    输入格式：文件路径|内容
+    """保存工具：将信息保存到指定文件路径.
+    
+    支持相对路径（相对于项目根目录）和绝对路径。
+    如果文件不存在，会自动创建目录和文件。
     
     Args:
         input_str: 包含文件路径和内容的字符串，格式为"文件路径|内容"
@@ -438,12 +656,37 @@ def save_to_file(input_str: str) -> str:
         file_path = parts[0].strip()
         content = parts[1].strip()
         
-        # 确保目录存在
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        # 处理相对路径：如果是相对路径（以 .. 或不以 / 开头），则相对于 PoCGen 目录
+        if not os.path.isabs(file_path):
+            # 获取 PoCGen 目录（getWeb.py 在 PoCGen/tools/ 下，PoCGen 目录是其上一级）
+            pocgen_root = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..")
+            )
+            # 移除路径开头的 '../' 以防止跳出 PoCGen 目录
+            # 例如 '../output/...' -> 'output/...'
+            while file_path.startswith('../'):
+                file_path = file_path[3:]
+            while file_path.startswith('..\\'):
+                file_path = file_path[3:]
+            
+            file_path = os.path.normpath(os.path.join(pocgen_root, file_path))
         
-        # 使用覆盖模式写入
+        # 确保目录存在
+        dir_path = os.path.dirname(file_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        
+        # 尝试格式化 JSON 内容（如果是有效的 JSON）
+        try:
+            parsed_json = json.loads(content)
+            formatted_content = json.dumps(parsed_json, ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, ValueError):
+            # 如果不是有效的 JSON，直接使用原内容
+            formatted_content = content
+        
+        # 写入文件
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content + "\n")
+            f.write(formatted_content + "\n")
         
         result = {
             "success": True,
@@ -484,16 +727,16 @@ def crawl_reference(reference_url: str) -> str:
         # 添加延迟避免请求过快
         time.sleep(1)
         
-        response = requests.get(reference_url, headers=headers, timeout=15)
+        resp = _http_get_with_retry(reference_url, headers=headers, timeout=15, max_retries=3)
         
-        if response.status_code != 200:
+        if resp.status_code != 200:
             return json.dumps({
                 "success": False,
-                "error": f"HTTP请求失败，状态码: {response.status_code}",
+                "error": f"HTTP请求失败，状态码: {resp.status_code}",
                 "url": reference_url
             }, ensure_ascii=False)
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(resp.content, 'html.parser')
         
         # 提取页面标题
         title_tag = soup.find('title')
@@ -551,9 +794,13 @@ def crawl_github(github_url: str) -> str:
         # 尝试获取原始Markdown内容
         raw_url = github_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
         
-        response = requests.get(raw_url, headers=headers, timeout=10)
+        response = None
+        try:
+            response = _http_get_with_retry(raw_url, headers=headers, timeout=10, max_retries=3)
+        except Exception:
+            response = None
         
-        if response.status_code == 200:
+        if response is not None and response.status_code == 200:
             md_content = response.text
             result = _parse_github_markdown_content(md_content, github_url)
         else:
@@ -576,24 +823,34 @@ def crawl_github(github_url: str) -> str:
 
 
 
-def get_web_infomation(cve_str:str):
-    if not _HAS_LANGCHAIN:
-        print(
-            "[warning] LangChain optional dependencies missing; skip get_web_infomation()",
-            file=sys.stderr,
+def get_web_infomation(cve_str: str) -> None:
+    """从 NVD 数据库收集 CVE 信息并使用大模型整理.
+    
+    使用项目配置系统 (SETTINGS) 获取 LLM 配置，确保与 PoCGen 项目统一.
+    
+    Args:
+        cve_str: CVE 编号 (例如 "CVE-2025-9149")
+    """
+    # 生成带时间戳的文件名
+    timestamp = time.strftime("%Y%m%d_%H%M")
+    output_filename = f"{timestamp}_{cve_str}_info.json"
+    
+    # 从项目配置获取 LLM 设置
+    llm_settings = SETTINGS.llm
+    provider = llm_settings.providers.get(llm_settings.default_provider)
+    
+    if not provider:
+        raise RuntimeError(
+            f"LLM provider '{llm_settings.default_provider}' not configured. "
+            f"Available: {list(llm_settings.providers.keys())}"
         )
-        return None
-
-    # 配置大模型
-    base_url = "http://222.20.126.32:30000/v1"  # 您的大模型地址
-    api_key = "DeepseekV3.1_32@C402"  # API密钥
     
     llm = ChatOpenAI(
-        model="ds",
+        model=provider.model,
         temperature=0,
-        openai_api_base=base_url,
-        openai_api_key=api_key,
-        timeout=60
+        openai_api_base=provider.base_url,
+        openai_api_key=provider.api_key,
+        timeout=llm_settings.timeout_seconds,
     )
     
     # 获取工具（使用@tool装饰器会自动创建Tool对象）
@@ -603,15 +860,17 @@ def get_web_infomation(cve_str:str):
     prompt = hub.pull("hwchase17/react")
     agent = create_react_agent(llm, tools, prompt)
     agent_executor = AgentExecutor(
-        agent=agent, 
-        tools=tools, 
+        agent=agent,
+        tools=tools,
         verbose=True,
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        max_iterations=50,
+        max_execution_time=300,
     )
     
     # 测试
     questions = [
-        "请选择合适的工具，在NVD数据库随便搜索"+cve_str+"的信息，若爬取失败请多次爬取中间间隔30s直到成功，不允许假设自己成功了，也不允许放弃，记住漏洞的描述信息。然后请检测NVD搜索页面的参考链接，并依次爬取参考链接，获取参考链接中的漏洞信息，最后将所有爬取下来关于漏洞的信息分为三部分①描述信息的总结，②漏洞成因漏洞类型③PoC攻击报文部分例如以POST或GET开头的部分，三部分按照json格式保存到../output/searchResult/"+cve_str+"_info.json，三个字段名分别为info、reason、webpoc注意不要存储爬取失败的信息，如果提醒他、文件不存在请自行创建"
+        f"请选择合适的工具，在NVD数据库搜索{cve_str}的信息，若爬取失败请多次爬取直到成功，不允许假设自己成功了，也不允许放弃，记住漏洞的描述信息。然后请检测NVD搜索页面的参考链接，并依次爬取参考链接，获取参考链接中的漏洞信息，最后将所有爬取下来关于漏洞的信息分为三部分①描述信息的总结，②漏洞成因漏洞类型③PoC攻击报文部分例如以POST或GET开头的部分，三部分按照json格式保存到../output/searchResult/{output_filename}，三个字段名分别为info、reason、webpoc注意不要存储爬取失败的信息，如果提醒他、文件不存在请自行创建"
         
     ]
     
@@ -621,6 +880,88 @@ def get_web_infomation(cve_str:str):
         
         try:
             result = agent_executor.invoke({"input": question})
-            print(f"回答: {result['output']}")
+            raw_output = result.get("output") if isinstance(result, dict) else str(result)
+            print(f"回答: {raw_output}")
+            
+            # Agent 成功执行，已通过 save_to_file 工具保存结果
+            # 检查目标文件是否存在以确认保存成功
+            pocgen_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+            target_file = os.path.join(pocgen_root, "output", "searchResult", output_filename)
+            
+            if os.path.exists(target_file):
+                print(f"✓ Agent successfully saved results to: {target_file}")
+            else:
+                print(f"⚠ Warning: Expected file not found at {target_file}")
+                
         except Exception as e:
-            print(f"错误: {e}")
+            print(f"Agent error or timeout: {e}. Falling back to direct collection...")
+            try:
+                collected = _fallback_collect(cve_str)
+
+                # Ask the LLM to consolidate collected fragments into final JSON
+                consolidated: Dict[str, Any] = {"info": "", "reason": "", "webpoc": ""}
+                try:
+                    client = LLMClient()
+                    prompt_parts = [
+                        "You are given collected vulnerability information fragments. Consolidate them into a JSON object with exactly three keys: info, reason, webpoc.",
+                        "Return ONLY the JSON object, no explanation. If a field is empty, use an empty string.",
+                    ]
+                    # include collected descriptions (join with separators)
+                    descs = collected.get("descriptions") or []
+                    if descs:
+                        prompt_parts.append("Collected descriptions:\n" + "\n\n---\n\n".join(descs[:8]))
+                    cbs = collected.get("code_blocks") or []
+                    if cbs:
+                        # include up to first 6 code blocks (shorten long ones)
+                        brief_cbs = []
+                        for cb in cbs[:6]:
+                            if len(cb) > 4000:
+                                brief_cbs.append(cb[:4000])
+                            else:
+                                brief_cbs.append(cb)
+                        prompt_parts.append("Collected code blocks:\n" + "\n\n---\n\n".join(brief_cbs))
+
+                    prompt = "\n\n".join(prompt_parts)
+                    reply = client.chat([ChatMessage(role="user", content=prompt)], temperature=0, max_tokens=800)
+                    client.close()
+
+                    json_candidate = _extract_json_from_text(reply)
+                    if json_candidate:
+                        try:
+                            parsed = json.loads(json_candidate)
+                            if isinstance(parsed, dict):
+                                consolidated = {
+                                    "info": parsed.get("info") or "",
+                                    "reason": parsed.get("reason") or "",
+                                    "webpoc": parsed.get("webpoc") or "",
+                                }
+                        except Exception:
+                            pass
+                except Exception:
+                    # LLM generation failed; fall back to minimal consolidation from collected fragments
+                    pass
+
+                # If consolidation produced nothing, build minimal fallback
+                if not consolidated["info"] and (collected.get("descriptions") or []):
+                    consolidated["info"] = "\n\n".join(collected.get("descriptions")[:10])[:4000]
+                if not consolidated["webpoc"] and (collected.get("code_blocks") or []):
+                    # pick first code block that looks like HTTP request or first code block
+                    found = ""
+                    for cb in collected.get("code_blocks"):
+                        if re.search(r"^(GET|POST)\s+.*HTTP/\d\.\d", cb, flags=re.I | re.M):
+                            found = cb
+                            break
+                    if not found and collected.get("code_blocks"):
+                        found = collected.get("code_blocks")[0]
+                    consolidated["webpoc"] = (found or "").strip()
+
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "output", "searchResult"))
+                os.makedirs(out_dir, exist_ok=True)
+                fname_ts = f"{cve_str}_info_{ts}.json"
+                fpath_ts = os.path.join(out_dir, fname_ts)
+                with open(fpath_ts, "w", encoding="utf-8") as fh:
+                    json.dump(consolidated, fh, ensure_ascii=False, indent=2)
+                print(f"Saved fallback structured result to: {fpath_ts}")
+            except Exception as e2:
+                print(f"Fallback also failed: {e2}")
