@@ -4,6 +4,7 @@ from typing import Optional, Tuple, List, Dict, Any
 
 import json
 import re
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -15,7 +16,8 @@ from PoCGen.core.target_profile import TargetSample
 
 LOG_DIR = None
 LOG_FILE = None
-REQUEST_LOG_DIR = "/home/li/LLM_POC/PoCGen/output/request"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+REQUEST_LOG_DIR = str(PROJECT_ROOT / "output" / "request")
 
 
 def _ensure_log():

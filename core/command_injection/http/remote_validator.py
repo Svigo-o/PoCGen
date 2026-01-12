@@ -6,10 +6,9 @@ import httpx
 
 from PoCGen.config.config import SETTINGS
 from PoCGen.core.models import HTTPMessage, ValidationResult
-"""Remote (real request) validator helpers."""
 
 
-def _resolve_url(message: "HTTPMessage", target: str) -> str:
+def _resolve_url(message: HTTPMessage, target: str) -> str:
     from urllib.parse import urljoin
 
     path = message.path or "/"
@@ -20,20 +19,20 @@ def _resolve_url(message: "HTTPMessage", target: str) -> str:
 
 
 def _prepare_headers(headers: Dict[str, str]) -> Dict[str, str]:
-    cleaned = {}
-    for k, v in headers.items():
-        if k.lower() == "content-length":
+    cleaned: Dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() == "content-length":
             continue
-        cleaned[k] = v
+        cleaned[key] = value
     return cleaned
 
 
 def validate_http_requests(
-    requests: List["HTTPMessage"],
+    requests: List[HTTPMessage],
     target: str,
     session: Optional[httpx.Client] = None,
 ) -> List[ValidationResult]:
-    """Send generated HTTP requests to the target and return structured results."""
+    """Replay HTTP requests against the target to validate PoC behavior."""
     results: List[ValidationResult] = []
     client_kwargs = {
         "timeout": SETTINGS.validation_timeout,

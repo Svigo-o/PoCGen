@@ -75,7 +75,7 @@ $env:POCGEN_DS_API_KEY = "DeepseekV3.1_32@C402"
 ```
 
 ## 工作流程
-1) `cli.py` 读取描述与代码 -> 2) 选择漏洞处理器 -> 3) `prompts/templates.py` 拼装系统/用户消息 -> 4) `llm/client.py` 请求模型 -> 5) `postprocess.py` 分割/校验并保存 `.http` -> 6) 可选 `--probe-target` 采样追加到提示词 -> 7) 可选 `--auto-validate` 发送请求并在本地监听 `wget` 回调 -> 8) 将解析/验证/监控结果记录到 `GenerationResult.attempts`。
+1) `cli.py` 读取描述与代码 -> 2) 选择漏洞处理器 -> 3) `prompts/templates.py` 拼装系统/用户消息 -> 4) `llm/client.py` 请求模型 -> 5) `core/command_injection/http/postprocess.py` 分割/校验并保存 `.http` -> 6) 可选 `--probe-target` 采样追加到提示词 -> 7) 可选 `--auto-validate` 发送请求并在本地监听 `wget` 回调 -> 8) 将解析/验证/监控结果记录到 `GenerationResult.attempts`。
 
 ## 自动采样与验证
 - `--probe-target`：预先抓取目标响应，将页面上下文直接追加到提示词以辅助生成。
@@ -95,7 +95,7 @@ $env:POCGEN_DS_API_KEY = "DeepseekV3.1_32@C402"
 
 ## 注意
 - 工具生成 PoC 但不会在未开启 `--auto-validate` 时主动发包；请确保使用场景获得授权。
-- 模型输出已做最小化解析/校验，如需更严格规范可扩展 `validators.py`。
+- 模型输出已做最小化解析/校验，如需更严格规范可扩展 `core/command_injection/http/validators.py`。
 - “思考模式”默认开启（通过 OpenAI SDK `extra_body`），如需关闭可在配置层调整。
 
 ---
