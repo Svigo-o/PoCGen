@@ -1,4 +1,4 @@
-# PoCGen：基于大模型的命令注入（HTTP）PoC 生成器
+# PoCGen：基于大模型的命令注入（HTTP / Socket）PoC 生成器
 
 PoCGen 将“漏洞描述 + 相关代码片段”转化为可直接落盘的原始 HTTP PoC，请求可选自动验证与多轮迭代，默认聚焦命令注入场景，后续可扩展到 SQLi / SSTI / SSRF 等。
 
@@ -7,7 +7,8 @@ PoCGen 将“漏洞描述 + 相关代码片段”转化为可直接落盘的原�
 - 多轮自修正：支持“采样 → 生成 → 自动验证 → 回调监控”循环，按反馈修正请求直至成功或达最大轮次。
 - 自动采样：`--probe-target` 先访问目标获取页面/接口样本，附加进提示词。
 - 浏览器采样：`--browser-login` 触发 Playwright 采集中包含登录流程的页面，抓取样本与 Cookie 供提示词参考。
-- 统一输出：`output/poc`（PoC）与 `output/cookie`（浏览器 Cookie/请求响应）。
+- Socket 事件：新增 `command_injection_socket` handler，输出合法的 Socket.IO 事件 JSON，并自动发包验证。
+- 统一输出：`output/poc`（HTTP PoC）、`output/socket`（Socket 事件）、`output/cookie`（浏览器 Cookie/请求响应）。
 - 可扩展：处理器（Handler）机制分离漏洞类型与提示词。
 
 ## 快速上手
@@ -15,7 +16,7 @@ PoCGen 将“漏洞描述 + 相关代码片段”转化为可直接落盘的原�
 # 安装依赖（Python 3.9+，推荐 3.10+）
 python -m pip install -r PoCGen/requirements.txt
 
-# 最小示例
+# 最小示例（HTTP）
 python -m PoCGen.cli --desc PoCGen/data/desc.txt --code src/*.c
 
 # 带目标提示（仅用于提示词构造）
@@ -30,10 +31,15 @@ python -m PoCGen.cli --code src/*.c --target http://192.168.6.2 \
   --probe-target --browser-login --login-url http://192.168.6.2/ \
   --login-username admin --login-password admin --auto-validate
 
+# Socket.IO 事件示例
+python -m PoCGen.cli --desc desc.txt --code src/*.c \
+  --target ws://192.168.6.2:3000/socket.io/?EIO=4&transport=websocket \
+  --vuln-type command_injection_socket --auto-validate
+
 提示：浏览器登录流程仅用于采样阶段，自动验证不会复用浏览器 Cookie。
 ```
 
-生成的 PoC 以时间戳命名写入 `output/poc`（如 `poc_20250101_120000_01.http`），重名自动加序号。
+生成的 HTTP PoC 以时间戳命名写入 `output/poc`（如 `poc_20250101_120000_01.http`），Socket.IO 事件写入 `output/socket/socket_poc_<ts>_nn.json`，重名自动加序号。
 
 ## 目录速览
 - `config/`：配置加载，含默认模型与输出目录设置。
@@ -53,7 +59,8 @@ python -m PoCGen.cli --code src/*.c --target http://192.168.6.2 \
 | `POCGEN_DEFAULT_PROVIDER` | 默认模型提供商 | qwen |
 | `POCGEN_TIMEOUT` | LLM 请求超时（秒） | 60 |
 | `POCGEN_OUTPUT_ROOT` | 输出根目录 | `PoCGen/output` |
-| `POCGEN_OUTPUT_DIR` | PoC 输出目录 | `${OUTPUT_ROOT}/poc` |
+| `POCGEN_OUTPUT_DIR` | HTTP PoC 输出目录 | `${OUTPUT_ROOT}/poc` |
+| `POCGEN_SOCKET_OUTPUT_DIR` | Socket PoC 输出目录 | `${OUTPUT_ROOT}/socket` |
 | `POCGEN_COOKIE_DIR` | 浏览器报文目录 | `${OUTPUT_ROOT}/cookie` |
 | `POCGEN_VULN_TYPE` | 漏洞类型 key | command_injection_http |
 | `POCGEN_ATTACKER_URL` | payload wget 目标 | `http://192.168.6.1:6666/testpoc` |
@@ -75,7 +82,7 @@ $env:POCGEN_DS_API_KEY = "DeepseekV3.1_32@C402"
 ```
 
 ## 工作流程
-1) `cli.py` 读取描述与代码 -> 2) 选择漏洞处理器 -> 3) `prompts/templates.py` 拼装系统/用户消息 -> 4) `llm/client.py` 请求模型 -> 5) `core/command_injection/http/postprocess.py` 分割/校验并保存 `.http` -> 6) 可选 `--probe-target` 采样追加到提示词 -> 7) 可选 `--auto-validate` 发送请求并在本地监听 `wget` 回调 -> 8) 将解析/验证/监控结果记录到 `GenerationResult.attempts`。
+1) `cli.py` 读取描述与代码 -> 2) 选择漏洞处理器（HTTP / Socket） -> 3) `prompts/templates.py` 拼装系统/用户消息 -> 4) `llm/client.py` 请求模型 -> 5) 处理器对应的 `postprocess.py` 完成分割/校验并保存（`.http` 或 `.json`） -> 6) 可选 `--probe-target` 采样追加到提示词 -> 7) 可选 `--auto-validate` 发送请求并在本地监听 `wget` 回调 -> 8) 将解析/验证/监控结果记录到 `GenerationResult.attempts`。
 
 ## 自动采样与验证
 - `--probe-target`：预先抓取目标响应，将页面上下文直接追加到提示词以辅助生成。
@@ -85,6 +92,7 @@ $env:POCGEN_DS_API_KEY = "DeepseekV3.1_32@C402"
 
 ## 输出位置
 - PoC 报文：`output/poc/poc_<timestamp>_nn.http`
+- Socket 事件：`output/socket/socket_poc_<timestamp>_nn.json`
 - 浏览器采样 Cookie / 请求响应：`output/cookie/<ts>-cookies.json` 与 `<ts>-cookie.http`
 
 ## 扩展新漏洞类型

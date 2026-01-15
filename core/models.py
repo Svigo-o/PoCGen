@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+import json
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -40,6 +41,64 @@ class HTTPMessage:
 
 
 @dataclass
+class SocketEventMessage:
+    url: str
+    event: str
+    payload: Any
+    namespace: Optional[str] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+    cookies: Optional[str] = None
+    wait_for_response: bool = True
+    max_response_frames: int = 1
+
+    @staticmethod
+    def parse(raw: str) -> "SocketEventMessage":
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Socket event payload must be a JSON object")
+        url = str(data.get("url") or "").strip()
+        event = str(data.get("event") or "").strip()
+        if not url:
+            raise ValueError("Missing socket URL")
+        if not event:
+            raise ValueError("Missing socket event name")
+        payload = data.get("payload")
+        namespace = data.get("namespace")
+        headers_raw = data.get("headers") or {}
+        if not isinstance(headers_raw, dict):
+            raise ValueError("headers must be an object")
+        headers = {str(k): str(v) for k, v in headers_raw.items()}
+        cookies = data.get("cookies")
+        wait_for_response = bool(
+            data.get("wait_for_response") if data.get("wait_for_response") is not None else True
+        )
+        max_response_frames = int(data.get("max_response_frames") or 1)
+        return SocketEventMessage(
+            url=url,
+            event=event,
+            payload=payload,
+            namespace=str(namespace).strip() if namespace else None,
+            headers=headers,
+            cookies=str(cookies).strip() if cookies else None,
+            wait_for_response=wait_for_response,
+            max_response_frames=max_response_frames,
+        )
+
+    def to_json(self) -> str:
+        data = {
+            "url": self.url,
+            "event": self.event,
+            "namespace": self.namespace,
+            "headers": self.headers,
+            "cookies": self.cookies,
+            "wait_for_response": self.wait_for_response,
+            "max_response_frames": self.max_response_frames,
+            "payload": self.payload,
+        }
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+@dataclass
 class ValidationResult:
     request_index: int
     url: str
@@ -59,6 +118,7 @@ class AttemptResult:
     monitor_hit: bool
     monitor_summary: Optional[str]
     feedback: Optional[str]
+    socket_events: Optional[List[SocketEventMessage]] = None
 
 
 @dataclass
@@ -69,6 +129,7 @@ class GenerationResult:
     validation_results: Optional[List[ValidationResult]] = None
     attempts: Optional[List[AttemptResult]] = None
     success: Optional[bool] = None
+    socket_events: Optional[List[SocketEventMessage]] = None
 
 
 class VulnHandler:

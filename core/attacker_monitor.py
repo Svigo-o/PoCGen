@@ -8,10 +8,20 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qs
+import errno
 
 import httpx
 
 from rich.console import Console
+
+MONITOR_LISTEN_HOST = "0.0.0.0"
+MONITOR_LOOPBACK_HOST = "127.0.0.1"
+MONITOR_PORT = 6666
+
+
+def get_monitor_base_url() -> str:
+    return f"http://{MONITOR_LOOPBACK_HOST}:{MONITOR_PORT}"
+
 
 console = Console()
 
@@ -44,21 +54,32 @@ class _MonitorHandler(BaseHTTPRequestHandler):
 
 
 class AttackerMonitor:
-    def __init__(self, url: str, timeout: float) -> None:
-        parsed = urlparse(url)
-        self.listen_host = parsed.hostname or "0.0.0.0"
-        self.listen_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    def __init__(self, url: Optional[str], timeout: float) -> None:
+        parsed = urlparse(url) if url else None
+        self.listen_host = MONITOR_LISTEN_HOST
+        self.listen_port = MONITOR_PORT
+        if parsed and parsed.hostname:
+            # Allow overriding via explicit URL when running standalone CLI.
+            self.listen_host = parsed.hostname
+        if parsed and parsed.port:
+            self.listen_port = parsed.port
         self.timeout = timeout
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._event = threading.Event()
         self.last_request_summary: Optional[str] = None
         self.last_hit_ts: Optional[float] = None
+        self._reused_existing = False
 
     def start(self) -> None:
         try:
             self._server = ThreadingHTTPServer((self.listen_host, self.listen_port), _MonitorHandler)
         except OSError as exc:
+            if exc.errno == errno.EADDRINUSE and monitor_available(get_monitor_base_url()):
+                console.print(f"[cyan]Attacker monitor already running on {get_monitor_base_url()}, reusing existing instance")
+                self._reused_existing = True
+                self._server = None
+                return
             console.print(f"[yellow]Warning: failed to start attacker monitor on {self.listen_host}:{self.listen_port}: {exc}")
             self._server = None
             return
@@ -68,7 +89,7 @@ class AttackerMonitor:
         console.print(f"[green]Attacker monitor listening on http://{self.listen_host}:{self.listen_port}")
 
     def is_running(self) -> bool:
-        return self._server is not None
+        return self._server is not None or self._reused_existing
 
     def record_hit(self, handler: _MonitorHandler) -> None:
         remote_ip, remote_port = handler.client_address if handler.client_address else ("?", "?")
@@ -110,14 +131,18 @@ class AttackerMonitor:
         handler.wfile.write(body)
 
     def wait_for_hit(self, timeout: Optional[float] = None) -> bool:
-        if not self._server:
-            return False
-        wait_timeout = self.timeout if timeout is None else timeout
-        hit = self._event.wait(wait_timeout)
-        if hit:
-            # Allow waiting again for subsequent attempts
-            self._event.clear()
-        return hit
+        if self._server:
+            wait_timeout = self.timeout if timeout is None else timeout
+            hit = self._event.wait(wait_timeout)
+            if hit:
+                self._event.clear()
+            return hit
+        if self._reused_existing:
+            hit, summary = wait_for_external_monitor(get_monitor_base_url(), timeout or self.timeout)
+            if hit:
+                self.last_request_summary = summary
+            return hit
+        return False
 
     def stop(self) -> None:
         if self._server:
@@ -128,17 +153,21 @@ class AttackerMonitor:
             self._thread.join(timeout=1)
         self._thread = None
         self._event.clear()
+        self._reused_existing = False
 
 
-def _status_url(base_url: str) -> str:
+def _status_url(base_url: Optional[str]) -> str:
+    if not base_url:
+        base_url = get_monitor_base_url()
     parsed = urlparse(base_url)
-    path = "/_status"
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return urlunparse((parsed.scheme, f"{parsed.hostname}:{port}", path, "", "", ""))
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or MONITOR_LOOPBACK_HOST
+    port = parsed.port or (443 if scheme == "https" else MONITOR_PORT)
+    return urlunparse((scheme, f"{host}:{port}", "/_status", "", "", ""))
 
 
-def monitor_available(url: str, timeout: float = 1.0) -> bool:
-    """Check if a monitor is already running at the given URL."""
+def monitor_available(url: Optional[str] = None, timeout: float = 1.0) -> bool:
+    """Check if a monitor is already running at the local monitor URL."""
     status_url = _status_url(url)
     try:
         resp = httpx.get(status_url, timeout=timeout, verify=False)
@@ -147,7 +176,7 @@ def monitor_available(url: str, timeout: float = 1.0) -> bool:
         return False
 
 
-def reset_external_monitor(url: str, timeout: float = 1.0) -> bool:
+def reset_external_monitor(url: Optional[str] = None, timeout: float = 1.0) -> bool:
     """Clear any prior hit state on an existing monitor."""
     status_url = _status_url(url)
     try:
@@ -157,7 +186,9 @@ def reset_external_monitor(url: str, timeout: float = 1.0) -> bool:
         return False
 
 
-def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1.0, since_ts: Optional[float] = None) -> Tuple[bool, Optional[str]]:
+def wait_for_external_monitor(
+    url: Optional[str], timeout: float, poll_interval: float = 1.0, since_ts: Optional[float] = None
+) -> Tuple[bool, Optional[str]]:
     """Poll an already-running monitor for a hit within timeout, optionally only after since_ts (epoch seconds)."""
     status_url = _status_url(url)
     deadline = time.time() + timeout
@@ -179,6 +210,7 @@ def wait_for_external_monitor(url: str, timeout: float, poll_interval: float = 1
 
 __all__ = [
     "AttackerMonitor",
+    "get_monitor_base_url",
     "monitor_available",
     "reset_external_monitor",
     "wait_for_external_monitor",

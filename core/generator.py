@@ -6,11 +6,16 @@ from .command_injection.http.http_command_injection import (
     CommandInjectionHTTPHandler,
     generate_command_injection_http,
 )
+from .command_injection.socket.socket_command_injection import (
+    CommandInjectionSocketHandler,
+    generate_command_injection_socket,
+)
 from .models import GenerationResult, VulnHandler
 
 
 HANDLERS: Dict[str, Type[VulnHandler]] = {
     CommandInjectionHTTPHandler.name: CommandInjectionHTTPHandler,
+    CommandInjectionSocketHandler.name: CommandInjectionSocketHandler,
 }
 
 HandlerEntryPoint = Callable[..., GenerationResult]
@@ -76,4 +81,5 @@ def generate_poc(
     )
 
 HANDLER_ENTRYPOINTS[CommandInjectionHTTPHandler.name] = generate_command_injection_http
+HANDLER_ENTRYPOINTS[CommandInjectionSocketHandler.name] = generate_command_injection_socket
 

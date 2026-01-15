@@ -38,3 +38,17 @@ python3 -m PoCGen.cli \
   --login-url http://192.168.1.2 \
   --login-username admin --login-password admin \
   --auto-validate --max-iters 5
+
+synology
+CVE-2024-10443 (socket/no-probe)
+python3 -m PoCGen.cli \
+  --desc /home/li/LLM_POC/vul_func_desc_poc/synology/CVE-2024-10443/vul_description.txt \
+  --code /home/li/LLM_POC/vul_func_desc_poc/synology/CVE-2024-10443/Vul_code/BeePhotosextra.conf \
+  --code /home/li/LLM_POC/vul_func_desc_poc/synology/CVE-2024-10443/Vul_code/vul_code.js \
+  --target http://192.168.1.179:5000 \
+  --vuln-type command_injection_socket \
+  --probe-target --browser-login \
+  --login-url http://192.168.1.179:5000/#/signin \
+  --login-username Eliza \
+  --login-password Beth2026 \
+  --auto-validate --max-iters 5

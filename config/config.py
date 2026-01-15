@@ -68,6 +68,9 @@ class AppSettings(BaseModel):
     save_dir: str = Field(
         default=os.getenv("POCGEN_OUTPUT_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "poc"))
     )
+    socket_save_dir: str = Field(
+        default=os.getenv("POCGEN_SOCKET_OUTPUT_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "socket"))
+    )
     collect_dir: str = Field(
         default=os.getenv("POCGEN_COLLECT_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "collect"))
     )
