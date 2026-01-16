@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import List
+from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from PoCGen.core.models import SocketEventMessage
 from .validators import parse_and_validate
@@ -49,10 +50,13 @@ def save_socket_messages(raw_messages: List[str], output_dir: str) -> List[str]:
             fname = f"socket_poc_{ts}_{idx:02d}_{counter}.json"
             fpath = os.path.join(output_dir, fname)
             counter += 1
+        parsed: Any
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             parsed = raw
+        if isinstance(parsed, dict):
+            _normalize_socket_payload(parsed)
         with open(fpath, "w", encoding="utf-8") as fh:
             if isinstance(parsed, (dict, list)):
                 json.dump(parsed, fh, ensure_ascii=False, indent=2)
@@ -60,6 +64,31 @@ def save_socket_messages(raw_messages: List[str], output_dir: str) -> List[str]:
                 fh.write(str(parsed))
         paths.append(fpath)
     return paths
+
+
+def _normalize_socket_payload(data: Dict[str, Any]) -> None:
+    url = str(data.get("url") or "").strip()
+    path = str(data.get("path") or "").strip()
+    if not path and url:
+        parsed = urlparse(url)
+        if parsed.path:
+            path = parsed.path
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        if path:
+            data["path"] = path
+            data.pop("url", None)
+
+    headers = data.get("headers")
+    cookies = data.get("cookies")
+    if isinstance(headers, dict):
+        cookie_value = headers.get("Cookie") or headers.get("cookie")
+        if (cookies is None or str(cookies).strip() == "") and cookie_value:
+            data["cookies"] = cookie_value
+            headers.pop("Cookie", None)
+            headers.pop("cookie", None)
+        if not headers:
+            data.pop("headers", None)
 
 
 def parse_socket_payloads(raw_messages: List[str]) -> List[SocketEventMessage]:

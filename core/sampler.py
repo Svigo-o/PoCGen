@@ -19,6 +19,7 @@ from PoCGen.core.login_flow import (
     wait_for_url_change,
 )
 from PoCGen.core.target_profile import TargetSample
+from PoCGen.core.proxy import SocketCaptureProxy
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -228,7 +229,9 @@ def sample_target_with_playwright(
     captured_posts: List[str] = []
     captured_cookie_header: Optional[str] = None
     captured_socket_messages: List[str] = []
-    log_socket_requests = bool(capture_socket_messages)
+    log_socket_requests = False
+    proxy: Optional[SocketCaptureProxy] = None
+    proxy_url: Optional[str] = None
 
     login_chat_path = _create_login_chat_file()
     if login_chat_path:
@@ -241,95 +244,110 @@ def sample_target_with_playwright(
         )
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless_flag)
-        context = browser.new_context()
-        if capture_posts or log_socket_requests:
-            post_collector = captured_posts if capture_posts else None
-            socket_collector = captured_socket_messages if capture_socket_messages else None
-            log_dir = SOCKET_SAMPLE_DIR if log_socket_requests else REQUEST_LOG_DIR
-            socket_dir = None
-            _setup_network_logging(
-                context,
-                tag="login_flow",
-                post_collector=post_collector,
-                socket_collector=socket_collector,
-                log_socket_requests=log_socket_requests,
-                request_log_dir=log_dir,
-                socket_filter_dir=socket_dir,
+        browser = None
+        context = None
+        page = None
+        try:
+            if capture_socket_messages:
+                proxy = SocketCaptureProxy(output_dir=SOCKET_SAMPLE_DIR)
+                proxy.start()
+                proxy_url = proxy.server_url
+                _log(f"socket capture proxy started at {proxy_url}")
+
+            browser = p.chromium.launch(
+                headless=headless_flag,
+                proxy={"server": proxy_url} if proxy_url else None,
             )
-        page = context.new_page()
-
-        _log(f"open {login_page}")
-        page.goto(login_page, wait_until="networkidle", timeout=5000)
-        wait_for_page_idle(page, "login page load", total_timeout=20000)
-
-        if login_username is None and login_password is None:
-            login_result = LoginResult(None, None, "no-login", False, None)
-        else:
-            login_result = perform_login_interaction(page, login_username, login_password, login_chat_path)
-            if login_result.clicked_login:
-                wait_for_url_change(
-                    page,
-                    login_result.pre_login_url,
-                    "post-login url change",
-                    total_timeout=35000,
+            context = browser.new_context(ignore_https_errors=True)
+            if capture_posts:
+                post_collector = captured_posts if capture_posts else None
+                _setup_network_logging(
+                    context,
+                    tag="login_flow",
+                    post_collector=post_collector,
+                    socket_collector=None,
+                    log_socket_requests=False,
+                    request_log_dir=REQUEST_LOG_DIR,
+                    socket_filter_dir=None,
                 )
-                wait_for_page_idle(page, "post-login transition", total_timeout=35000)
+            page = context.new_page()
 
-        resp = None
-        cur_url = page.url
-        _log(f"post-login current url: {cur_url}")
-        try:
-            page.wait_for_selector("form, button, input, body", timeout=8000)
-        except Exception:
-            _log("post-login wait_for_selector timeout; continuing")
+            _log(f"open {login_page}")
+            page.goto(login_page, wait_until="networkidle", timeout=5000)
+            wait_for_page_idle(page, "login page load", total_timeout=20000)
 
-        try:
-            cur = urlparse(cur_url)
-            tgt = urlparse(target)
-            same_host = cur.netloc == tgt.netloc
-            same_prefix = cur.geturl().rstrip("/").startswith(tgt.geturl().rstrip("/"))
-        except Exception:
-            same_host = False
-            same_prefix = False
+            if login_username is None and login_password is None:
+                login_result = LoginResult(None, None, "no-login", False, None)
+            else:
+                login_result = perform_login_interaction(page, login_username, login_password, login_chat_path)
+                if login_result.clicked_login:
+                    wait_for_url_change(
+                        page,
+                        login_result.pre_login_url,
+                        "post-login url change",
+                        total_timeout=35000,
+                    )
+                    wait_for_page_idle(page, "post-login transition", total_timeout=35000)
 
-        normalized_login_url = normalize_url(login_page)
-        normalized_post_url = normalize_url(cur_url)
-        if normalized_login_url and normalized_post_url == normalized_login_url:
-            _log("post-login url matches login page; login may have failed")
-
-        if same_host and same_prefix:
-            _log("already on target host/path after login; reuse current page")
-            wait_for_page_idle(page, "post-login reuse", total_timeout=25000)
+            resp = None
+            cur_url = page.url
+            _log(f"post-login current url: {cur_url}")
             try:
                 page.wait_for_selector("form, button, input, body", timeout=8000)
             except Exception:
-                _log("post-login reuse wait_for_selector timeout; continuing")
-        else:
-            _log(f"goto target {target}")
-            resp = page.goto(target, wait_until="networkidle", timeout=25000)
-            wait_for_page_idle(page, "target navigation", total_timeout=25000)
+                _log("post-login wait_for_selector timeout; continuing")
 
-        if capture_socket_messages:
-            linger_ms = getattr(SETTINGS, "socket_sample_linger_ms", 4000)
-            if linger_ms and linger_ms > 0:
-                _log(f"socket sampling linger {linger_ms}ms before harvesting DOM")
-                try:
-                    page.wait_for_timeout(linger_ms)
-                except Exception:
-                    pass
-
-        if capture_cookies:
             try:
-                captured_cookie_header = _save_cookies(context, "post_login")
+                cur = urlparse(cur_url)
+                tgt = urlparse(target)
+                same_host = cur.netloc == tgt.netloc
+                same_prefix = cur.geturl().rstrip("/").startswith(tgt.geturl().rstrip("/"))
             except Exception:
-                captured_cookie_header = None
-        html = page.content()
-        status_code = resp.status if resp else 0
-        headers = resp.headers if resp else {}
-        _log(f"target status={status_code} headers={list(headers.keys()) if headers else []}")
+                same_host = False
+                same_prefix = False
 
-        browser.close()
+            normalized_login_url = normalize_url(login_page)
+            normalized_post_url = normalize_url(cur_url)
+            if normalized_login_url and normalized_post_url == normalized_login_url:
+                _log("post-login url matches login page; login may have failed")
+
+            if same_host and same_prefix:
+                _log("already on target host/path after login; reuse current page")
+                wait_for_page_idle(page, "post-login reuse", total_timeout=25000)
+                try:
+                    page.wait_for_selector("form, button, input, body", timeout=8000)
+                except Exception:
+                    _log("post-login reuse wait_for_selector timeout; continuing")
+            else:
+                _log(f"goto target {target}")
+                resp = page.goto(target, wait_until="networkidle", timeout=25000)
+                wait_for_page_idle(page, "target navigation", total_timeout=25000)
+
+            if capture_socket_messages:
+                linger_ms = getattr(SETTINGS, "socket_sample_linger_ms", 4000)
+                if linger_ms and linger_ms > 0:
+                    _log(f"socket sampling linger {linger_ms}ms before harvesting DOM")
+                    try:
+                        page.wait_for_timeout(linger_ms)
+                    except Exception:
+                        pass
+
+            if capture_cookies:
+                try:
+                    captured_cookie_header = _save_cookies(context, "post_login")
+                except Exception:
+                    captured_cookie_header = None
+            html = page.content()
+            status_code = resp.status if resp else 0
+            headers = resp.headers if resp else {}
+            _log(f"target status={status_code} headers={list(headers.keys()) if headers else []}")
+        finally:
+            if browser:
+                browser.close()
+            if proxy:
+                proxy.stop()
+                captured_socket_messages = proxy.get_samples()
+                _log(f"socket capture proxy collected {len(captured_socket_messages)} sample(s)")
 
     body = html
     if len(body) > preview_len:

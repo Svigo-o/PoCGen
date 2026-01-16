@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 from typing import List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from PoCGen.core.command_injection.socket.socket_sender import SocketIOSender
 from PoCGen.core.models import SocketEventMessage, ValidationResult
 
 
-def _resolve_url(event_url: str, target: Optional[str]) -> str:
-    if event_url and event_url.strip().lower().startswith(("ws://", "wss://")):
-        return event_url.strip()
+def _resolve_url(event_url: str, event_path: Optional[str], target: Optional[str]) -> str:
+    def _normalize_ws(url: str) -> str:
+        parsed = urlparse(url)
+        if parsed.scheme in {"ws", "wss"}:
+            return url
+        if parsed.scheme in {"http", "https"}:
+            ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+            return urlunparse((ws_scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        return url
+
+    if event_url and event_url.strip().lower().startswith(("ws://", "wss://", "http://", "https://")):
+        return _normalize_ws(event_url.strip())
     if target:
-        base = target.rstrip("/") + "/"
-        return urljoin(base, event_url.lstrip("/")) if event_url else target
+        base = _normalize_ws(target.rstrip("/") + "/")
+        if event_url:
+            return urljoin(base, event_url.lstrip("/"))
+        if event_path:
+            return urljoin(base, event_path.lstrip("/"))
+        return base.rstrip("/")
     if event_url:
-        return event_url
+        return _normalize_ws(event_url)
+    if event_path:
+        return event_path
     raise ValueError("Socket event is missing a resolvable URL")
 
 
@@ -25,7 +40,7 @@ def validate_socket_events(
     results: List[ValidationResult] = []
     for idx, event in enumerate(events):
         try:
-            url = _resolve_url(event.url, target)
+            url = _resolve_url(event.url, event.path, target)
         except Exception as exc:
             results.append(
                 ValidationResult(
@@ -44,13 +59,21 @@ def validate_socket_events(
             headers=event.headers or None,
         )
         try:
-            resp = sender.send_event(
-                event=event.event,
-                payload=event.payload,
-                cookies=event.cookies,
-                wait_for_response=event.wait_for_response,
-                max_response_frames=event.max_response_frames,
-            )
+            if event.raw_frame:
+                resp = sender.send_frame(
+                    frame=event.raw_frame,
+                    cookies=event.cookies,
+                    wait_for_response=event.wait_for_response,
+                    max_response_frames=event.max_response_frames,
+                )
+            else:
+                resp = sender.send_event(
+                    event=event.event or "",
+                    payload=event.payload,
+                    cookies=event.cookies,
+                    wait_for_response=event.wait_for_response,
+                    max_response_frames=event.max_response_frames,
+                )
             preview_parts = []
             if resp.handshake:
                 preview_parts.append(f"handshake={resp.handshake}")

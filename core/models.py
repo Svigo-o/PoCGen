@@ -43,8 +43,10 @@ class HTTPMessage:
 @dataclass
 class SocketEventMessage:
     url: str
-    event: str
-    payload: Any
+    path: Optional[str] = None
+    event: Optional[str] = None
+    payload: Any = None
+    raw_frame: Optional[str] = None
     namespace: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     cookies: Optional[str] = None
@@ -57,26 +59,34 @@ class SocketEventMessage:
         if not isinstance(data, dict):
             raise ValueError("Socket event payload must be a JSON object")
         url = str(data.get("url") or "").strip()
-        event = str(data.get("event") or "").strip()
-        if not url:
-            raise ValueError("Missing socket URL")
-        if not event:
-            raise ValueError("Missing socket event name")
+        path = str(data.get("path") or "").strip()
+        if not url and not path:
+            raise ValueError("Missing socket URL or path")
         payload = data.get("payload")
+        raw_frame = data.get("frame") or data.get("raw_frame")
+        event = None
+        if raw_frame is None:
+            event = str(data.get("event") or "").strip()
+            if not event:
+                raise ValueError("Missing socket event name or frame")
         namespace = data.get("namespace")
         headers_raw = data.get("headers") or {}
         if not isinstance(headers_raw, dict):
             raise ValueError("headers must be an object")
         headers = {str(k): str(v) for k, v in headers_raw.items()}
         cookies = data.get("cookies")
+        if (cookies is None or str(cookies).strip() == "") and "Cookie" in headers:
+            cookies = headers.pop("Cookie")
         wait_for_response = bool(
             data.get("wait_for_response") if data.get("wait_for_response") is not None else True
         )
         max_response_frames = int(data.get("max_response_frames") or 1)
         return SocketEventMessage(
             url=url,
+            path=path or None,
             event=event,
             payload=payload,
+            raw_frame=str(raw_frame) if raw_frame is not None else None,
             namespace=str(namespace).strip() if namespace else None,
             headers=headers,
             cookies=str(cookies).strip() if cookies else None,
@@ -87,6 +97,7 @@ class SocketEventMessage:
     def to_json(self) -> str:
         data = {
             "url": self.url,
+            "path": self.path,
             "event": self.event,
             "namespace": self.namespace,
             "headers": self.headers,
@@ -94,6 +105,7 @@ class SocketEventMessage:
             "wait_for_response": self.wait_for_response,
             "max_response_frames": self.max_response_frames,
             "payload": self.payload,
+            "frame": self.raw_frame,
         }
         return json.dumps(data, ensure_ascii=False, indent=2)
 
