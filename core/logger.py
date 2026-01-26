@@ -22,6 +22,14 @@ def _ensure_log() -> None:
     LOG_NEEDS_SEPARATOR = True
 
 
+_STDOUT_KEYWORDS = (
+    "POST sample saved",
+    "Socket sample saved",
+    "saved cookies to",
+    "socket capture proxy collected",
+)
+
+
 def _log(message: str) -> None:
     global LOG_NEEDS_SEPARATOR
     try:
@@ -33,6 +41,8 @@ def _log(message: str) -> None:
                 fh.write("\n")
                 LOG_NEEDS_SEPARATOR = False
             fh.write(f"[{ts}] {message}\n")
+        if any(keyword in message for keyword in _STDOUT_KEYWORDS):
+            print(message, flush=True)
     except Exception:
         pass
 

