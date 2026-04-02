@@ -38,10 +38,10 @@ class LLMSettings(BaseModel):
                     model=os.getenv("POCGEN_QWEN_MODEL", "qwen"),
                 ),
                 "deepseek": ProviderSettings(
-                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.32:30000/v1"),
-                    api_key=os.getenv("POCGEN_DS_API_KEY", "DeepseekV3.1_32@C402"),
-                    model=os.getenv("POCGEN_DS_MODEL", "deepseek"),
-                ),
+                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:3333/v1"),
+                    api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                    model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
+                )               
             }
         normalized: Dict[str, ProviderSettings] = {}
         for key, cfg in providers.items():
@@ -76,7 +76,7 @@ class AppSettings(BaseModel):
     )
     cookie_dir: str = Field(default=os.getenv("POCGEN_COOKIE_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "cookie")))
     default_vuln_type: str = Field(default=os.getenv("POCGEN_VULN_TYPE", "command_injection_http"))
-    attacker_url: str = Field(default=os.getenv("POCGEN_ATTACKER_URL", "http://192.168.6.1:6666/testpoc"))
+    payload: str = Field(default=os.getenv("POCGEN_PAYLOAD", "http://192.168.6.1:6666/testpoc"))
     http_proxy: str | None = Field(default=os.getenv("POCGEN_HTTP_PROXY"))
     sample_timeout: float = Field(default=float(os.getenv("POCGEN_SAMPLE_TIMEOUT", "8")))
     validation_timeout: float = Field(default=float(os.getenv("POCGEN_VALIDATION_TIMEOUT", "8")))

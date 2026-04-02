@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--vuln-type", default="command_injection_http", help="Vulnerability type handler key")
     parser.add_argument("--temperature", type=float, default=0.1, help="LLM generation temperature")
     parser.add_argument("--max-tokens", type=int, default=65535)
-    parser.add_argument("--attacker", default=None, help="攻击机 URL（用于 wget 取回 net.sh），默认从配置 POCGEN_ATTACKER_URL 读取")
+    parser.add_argument("--payload", default=None, help="想要执行的shell指令，例如 wget xxx或反弹shell等")
     parser.add_argument("--probe-target", action="store_true", help="在生成前主动访问 target，采集响应样本并提供给 LLM")
     parser.add_argument("--auto-validate", action="store_true", help="生成后自动向 target 发送 PoC 进行验证（需 target 可访问）")
     parser.add_argument("--max-iters", type=int, default=None, help="最大尝试次数（默认读取配置 POCGEN_MAX_ITERS）")
@@ -49,7 +49,7 @@ def main() -> None:
         vuln_type=args.vuln_type,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        attacker_url=args.attacker,
+        payload=args.payload,
         probe_target=args.probe_target,
         auto_validate=args.auto_validate,
         max_iterations=args.max_iters,

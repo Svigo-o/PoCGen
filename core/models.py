@@ -152,7 +152,7 @@ class VulnHandler:
         description: str,
         code_texts: List[str],
         target: Optional[str],
-        attacker_url: Optional[str] = None,
+        payload: Optional[str] = None,
         target_profile: Optional[str] = None,
     ) -> List[dict]:
         raise NotImplementedError
