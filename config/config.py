@@ -41,7 +41,12 @@ class LLMSettings(BaseModel):
                     base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
                     api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
                     model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
-                )               
+                ),
+                "glm-5.1-fp8": ProviderSettings(
+                    base_url=os.getenv("POCGEN_GLM_BASE_URL", "http://222.20.126.10:33330/v1"),
+                    api_key=os.getenv("POCGEN_GLM_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                    model=os.getenv("POCGEN_GLM_MODEL", "glm-5.1-fp8")
+                )                
             }
         normalized: Dict[str, ProviderSettings] = {}
         for key, cfg in providers.items():
