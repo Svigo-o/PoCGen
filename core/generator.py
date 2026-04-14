@@ -10,12 +10,35 @@ from .command_injection.socket.socket_command_injection import (
     CommandInjectionSocketHandler,
     generate_command_injection_socket,
 )
+from .stackoverflow.http.http_stack_overflow import (
+    StackOverflowHTTPHandler,
+    generate_stack_overflow_http,
+)
+
+from .cross_site_scripting.http_cross_site_scripting import (
+    CrossSiteScriptingHTTPHandler,
+    generate_cross_site_scripting_http,
+)
+
+from .stackoverflow.python.python_stack_overflow import (
+    StackOverflowPythonHandler,
+    generate_stack_overflow_python,
+)
+
+from PoCGen.core.path_traversal.http_path_traversal import (
+    PathTraversalHTTPHandler,
+    generate_path_traversal_http,
+)
 from .models import GenerationResult, VulnHandler
 
 
 HANDLERS: Dict[str, Type[VulnHandler]] = {
     CommandInjectionHTTPHandler.name: CommandInjectionHTTPHandler,
     CommandInjectionSocketHandler.name: CommandInjectionSocketHandler,
+    StackOverflowHTTPHandler.name: StackOverflowHTTPHandler,
+    CrossSiteScriptingHTTPHandler.name: CrossSiteScriptingHTTPHandler,
+    StackOverflowPythonHandler.name: StackOverflowPythonHandler,
+    PathTraversalHTTPHandler.name: PathTraversalHTTPHandler,
 }
 
 HandlerEntryPoint = Callable[..., GenerationResult]
@@ -82,4 +105,7 @@ def generate_poc(
 
 HANDLER_ENTRYPOINTS[CommandInjectionHTTPHandler.name] = generate_command_injection_http
 HANDLER_ENTRYPOINTS[CommandInjectionSocketHandler.name] = generate_command_injection_socket
-
+HANDLER_ENTRYPOINTS[StackOverflowHTTPHandler.name] = generate_stack_overflow_http
+HANDLER_ENTRYPOINTS[CrossSiteScriptingHTTPHandler.name] = generate_cross_site_scripting_http 
+HANDLER_ENTRYPOINTS[StackOverflowPythonHandler.name] = generate_stack_overflow_python
+HANDLER_ENTRYPOINTS[PathTraversalHTTPHandler.name] = generate_path_traversal_http
