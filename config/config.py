@@ -89,6 +89,14 @@ class AppSettings(BaseModel):
     max_iterations: int = Field(default=int(os.getenv("POCGEN_MAX_ITERS", "1")))
     stop_on_success: bool = Field(default=os.getenv("POCGEN_STOP_ON_SUCCESS", "true").lower() not in {"0", "false", "no"})
     monitor_timeout: float = Field(default=float(os.getenv("POCGEN_MONITOR_TIMEOUT", "10")))
+    ida_mcp_url: str = Field(default=os.getenv("POCGEN_IDA_MCP_URL", "http://127.0.0.1:8745/mcp"))
+    ida_mcp_bin: str = Field(
+        default=os.getenv(
+            "POCGEN_IDA_MCP_BIN",
+            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ida-mcp-env", ".venv", "bin", "idalib-mcp")),
+        )
+    )
+    ida_mcp_startup_timeout: float = Field(default=float(os.getenv("POCGEN_IDA_MCP_STARTUP_TIMEOUT", "120")))
 
 
 def get_settings() -> AppSettings:

@@ -32,6 +32,8 @@ def main() -> None:
     parser.add_argument("--browser-login", action="store_true", help="使用 Playwright 浏览器登录以获取 cookie 后再验证")
     parser.add_argument("--browser-headful", action="store_true", help="浏览器登录时显示界面（headful），默认无头模式")
     parser.add_argument("--CVENumber",  default=None, help="浏览器登录时显示界面（headful），默认无头模式")
+    parser.add_argument("--binary", default=None, help="漏洞二进制文件路径，启用 Step1+Step2 自动分析（IDA MCP）")
+    parser.add_argument("--ida-mcp-url", default=None, help="IDA MCP 服务地址，默认 http://127.0.0.1:8745/mcp")
     args = parser.parse_args()
 
     if args.desc:
@@ -63,6 +65,8 @@ def main() -> None:
         login_pass_field=args.login_pass_field,
         use_browser_login=args.browser_login,
         browser_headless=None if not args.browser_headful else False,
+        binary_path=args.binary,
+        ida_mcp_url=args.ida_mcp_url,
     )
 
     print("\nGenerated and saved the following PoC files:")

@@ -51,6 +51,8 @@ def generate_poc(
     login_pass_field: str = "password",
     use_browser_login: bool = False,
     browser_headless: Optional[bool] = None,
+    binary_path: Optional[str] = None,
+    ida_mcp_url: Optional[str] = None,
 ) -> GenerationResult:
     selected_vuln_type = vuln_type or SETTINGS.default_vuln_type
     handler_entry = HANDLER_ENTRYPOINTS.get(selected_vuln_type)
@@ -78,6 +80,8 @@ def generate_poc(
         login_pass_field=login_pass_field,
         use_browser_login=use_browser_login,
         browser_headless=browser_headless,
+        binary_path=binary_path,
+        ida_mcp_url=ida_mcp_url,
     )
 
 HANDLER_ENTRYPOINTS[CommandInjectionHTTPHandler.name] = generate_command_injection_http

@@ -20,6 +20,7 @@ from PoCGen.core.attacker_monitor import (
     wait_for_external_monitor,
 )
 from PoCGen.tools.getWeb import get_web_infomation
+from PoCGen.core.vuln_analyzer import analyze_vulnerability, VulnAnalysisResult
 from PoCGen.core.models import (
     AttemptResult,
     GenerationResult,
@@ -56,6 +57,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
         payload: str,
         target_profile: Optional[str] = None,
         validation_feedback: Optional[str] = None,
+        vuln_analysis: Optional[str] = None,
     ) -> List[dict]:
         msgs = build_prompt_command_injection_http(
             description=description,
@@ -64,6 +66,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
             payload=payload,
             target_profile=target_profile,
             validation_feedback=validation_feedback,
+            vuln_analysis=vuln_analysis,
         )
         return [m.model_dump() for m in msgs]
 
@@ -89,6 +92,8 @@ def generate_command_injection_http(
     login_pass_field: str = "password",
     use_browser_login: bool = False,
     browser_headless: Optional[bool] = None,
+    binary_path: Optional[str] = None,
+    ida_mcp_url: Optional[str] = None,
 ) -> GenerationResult:
     handler_key = vuln_type or CommandInjectionHTTPHandler.name
     handler = CommandInjectionHTTPHandler()
@@ -113,8 +118,37 @@ def generate_command_injection_http(
         f"description: {description}\n"
         f"target: {target or '<none>'}\n"
         f"vuln_type: {handler_key}\n"
-        f"payload: {final_payload}"
+        f"payload: {final_payload}\n"
+        f"binary_path: {binary_path or '<none>'}"
     )
+
+    # ------------------------------------------------------------------
+    # Vulnerability analysis (source code + optional IDA MCP binary data)
+    # ------------------------------------------------------------------
+    vuln_analysis_block: Optional[str] = None
+
+    if binary_path:
+        console.print("[bold]Vulnerability analysis (source + binary)")
+        try:
+            vuln_result = analyze_vulnerability(
+                description=description,
+                code_texts=code_texts,
+                cvenumber=cvenumber,
+                binary_path=binary_path,
+                mcp_url=ida_mcp_url,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            log_chat(f"Vuln analysis result: valid={vuln_result.is_valid}, summary={vuln_result.summary}")
+            if vuln_result.is_valid:
+                vuln_analysis_block = vuln_result.as_prompt_block
+            else:
+                vuln_analysis_block = vuln_result.raw_output[:3000]
+        except Exception as exc:
+            console.print(f"[yellow]Vulnerability analysis failed: {exc}")
+            log_chat(f"Vuln analysis exception: {exc}")
+    else:
+        console.print("[dim]No binary path provided; skipping vulnerability analysis")
 
     max_iters = max(1, max_iterations or SETTINGS.max_iterations)
     if not auto_validate:
@@ -140,6 +174,7 @@ def generate_command_injection_http(
         final_payload,
         None,
         None,
+        vuln_analysis_block,
     )]
     monitor_running = False
     if auto_validate:

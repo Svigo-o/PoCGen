@@ -6,8 +6,8 @@ from PoCGen.llm.client import ChatMessage
 from PoCGen.config.config import SETTINGS
 
 
-def _build_http_system_prompt(payload: str) -> str:
-    return (
+def _build_http_system_prompt(payload: str, has_sample: bool = False) -> str:
+    base = (
         "You are a security researcher generating ONE raw HTTP request PoC for a command injection vulnerability.\n"
         "Given several source files and a short vulnerability description, output EXACTLY ONE raw HTTP request that could exploit the issue.\n"
         f"Objective: use a command-injection payload that executes the shell payload '{payload}'. The payload represents the shell command to execute; infer the vulnerable parameter and request structure from the provided code and description.\n"
@@ -36,24 +36,28 @@ def _build_http_system_prompt(payload: str) -> str:
         f"- Body should contain a minimal injection payload referencing a plausible vulnerable parameter. Prefer delimiter order: first '$(...)', then '`...`', then ';...;' or '&& ...'. The payload's purpose is to execute the shell command payload '{payload}'.\n"
         "- Content-Length MUST be the exact UTF-8 byte length of the body. Determine it AFTER finalizing the exact body content (including any trailing newline if present). Do not guess.\n"
         f"- IMPORTANT: The payload in the body MUST be plaintext (NOT percent-encoded). Do NOT URL-encode the '{payload}' or the separators '$()'/'`...`'/';'/'&&'. DO NOT alter or substitute any IP addresses, URLs, or commands within the '{payload}'. Use it EXACTLY as provided. If credentials/cookies are needed, include a realistic placeholder cookie, e.g., 'Cookie: Authorization=REPLACE_ME'.\n"
-        "\n"
-        "Fallback structure if no sample interaction is available (adjust as needed):\n"
-        "  POST /path/to/vuln HTTP/1.1\n"
-        "  Host: <HOST>\n"
-        "  User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0\n"
-        "  Accept: application/json, text/javascript, */*; q=0.01\n"
-        "  Accept-Language: en-US,en;q=0.5\n"
-        "  Accept-Encoding: gzip, deflate, br\n"
-        "  Content-Type: application/x-www-form-urlencoded; charset=UTF-8\n"
-        "  X-Requested-With: XMLHttpRequest\n"
-        "  Content-Length: <LEN>\n"
-        "  Origin: http://<HOST>\n"
-        "  Connection: keep-alive\n"
-        "  Referer: http://<HOST>/\n"
-        "  Cookie: <COOKIE_IF_NEEDED>\n"
-        "  \n"
-        "  <BODY_WITH_INJECTION>\n"
     )
+    if not has_sample:
+        base += (
+            "\n"
+            "Fallback structure if no sample interaction is available (adjust as needed):\n"
+            "  POST /path/to/vuln HTTP/1.1\n"
+            "  Host: <HOST>\n"
+            "  User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0\n"
+            "  Accept: application/json, text/javascript, */*; q=0.01\n"
+            "  Accept-Language: en-US,en;q=0.5\n"
+            "  Accept-Encoding: gzip, deflate, br\n"
+            "  Content-Type: application/x-www-form-urlencoded; charset=UTF-8\n"
+            "  X-Requested-With: XMLHttpRequest\n"
+            "  Content-Length: <LEN>\n"
+            "  Origin: http://<HOST>\n"
+            "  Connection: keep-alive\n"
+            "  Referer: http://<HOST>/\n"
+            "  Cookie: <COOKIE_IF_NEEDED>\n"
+            "  \n"
+            "  <BODY_WITH_INJECTION>\n"
+        )
+    return base
 
 
 def _build_user_context(
@@ -63,6 +67,7 @@ def _build_user_context(
     target: str | None,
     target_profile: str | None,
     validation_feedback: str | None,
+    vuln_analysis: str | None = None,
 ) -> str:
     user_parts: List[str] = []
     user_parts.append("Vulnerability Description:\n" + description.strip())
@@ -70,6 +75,11 @@ def _build_user_context(
         user_parts.append(f"Target Hint: {target}")
     if target_profile:
         user_parts.append(target_profile)
+    if vuln_analysis:
+        user_parts.append(
+            "Vulnerability Analysis Results (from source-code and binary analysis – use these as the primary reference for the exploit structure):\n"
+            + vuln_analysis.strip()
+        )
     if validation_feedback:
         user_parts.append(
             "Previous attempt feedback (use this to refine the next request):\n" + validation_feedback.strip()
@@ -87,17 +97,20 @@ def build_prompt_command_injection_http(
     payload: Optional[str] = None,
     target_profile: str | None = None,
     validation_feedback: str | None = None,
+    vuln_analysis: str | None = None,
 ) -> List[ChatMessage]:
     final_payload = payload or SETTINGS.payload
+    has_sample = bool(target_profile and target_profile.strip())
     user = _build_user_context(
         description=description,
         code_files=code_files,
         target=target,
         target_profile=target_profile,
         validation_feedback=validation_feedback,
+        vuln_analysis=vuln_analysis,
     )
     return [
-        ChatMessage(role="system", content=_build_http_system_prompt(final_payload)),
+        ChatMessage(role="system", content=_build_http_system_prompt(final_payload, has_sample=has_sample)),
         ChatMessage(role="user", content=user),
     ]
 
@@ -129,6 +142,7 @@ def build_prompt_command_injection_socket(
     payload: Optional[str] = None,
     target_profile: str | None = None,
     validation_feedback: str | None = None,
+    vuln_analysis: str | None = None,
 ) -> List[ChatMessage]:
     final_payload = payload or SETTINGS.payload
     user = _build_user_context(
@@ -137,6 +151,7 @@ def build_prompt_command_injection_socket(
         target=target,
         target_profile=target_profile,
         validation_feedback=validation_feedback,
+        vuln_analysis=vuln_analysis,
     )
     return [
         ChatMessage(role="system", content=_build_socket_system_prompt(final_payload)),

