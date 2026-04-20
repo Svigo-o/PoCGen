@@ -197,6 +197,7 @@ def generate_command_injection_socket(
                 console.print("[yellow]Warning: attacker monitor failed to start; success detection will be disabled for this run")
 
     generation_start_ts = time.time()
+    llm_client = LLMClient()
 
     try:
         target_profile_block: Optional[str] = None
@@ -250,11 +251,7 @@ def generate_command_injection_socket(
                 "\n".join(f"- {m.role}: {m.content}" for m in messages)
             )
 
-            client = LLMClient()
-            try:
-                raw_output = client.chat(messages, temperature=temperature, max_tokens=max_tokens)
-            finally:
-                client.close()
+            raw_output = llm_client.chat(messages, temperature=temperature, max_tokens=max_tokens)
 
             log_chat("Model output:\n" + raw_output)
 
@@ -378,6 +375,7 @@ def generate_command_injection_socket(
             socket_events=last_events,
         )
     finally:
+        llm_client.close()
         if monitor:
             monitor.stop()
 
