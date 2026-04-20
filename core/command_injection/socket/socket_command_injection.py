@@ -35,6 +35,17 @@ from .remote_validator import validate_socket_events
 console = Console()
 
 
+def _build_socket_retry_prompt(previous_raw_output: str, feedback_text: Optional[str]) -> str:
+    parts: List[str] = [
+        "Previous generated socket payload failed. Generate ONE corrected JSON payload.",
+        "Keep output format unchanged: exactly one JSON object matching the required schema.",
+        "Failed payload from previous attempt:\n" + (previous_raw_output or "<empty>"),
+    ]
+    if feedback_text:
+        parts.append("Error report for correction:\n" + feedback_text)
+    return "\n\n".join(parts)
+
+
 class CommandInjectionSocketHandler(VulnHandler):
     name = "command_injection_socket"
 
@@ -123,7 +134,7 @@ def generate_command_injection_socket(
     monitor: Optional[AttackerMonitor] = None
     external_monitor_url: Optional[str] = None
     monitor_base_url = get_monitor_base_url()
-    conversation_messages: List[ChatMessage] = [
+    initial_messages: List[ChatMessage] = [
         ChatMessage(**m)
         for m in handler.build_messages(
             description,
@@ -186,11 +197,18 @@ def generate_command_injection_socket(
             if feedback_text:
                 log_chat(f"Feedback provided to model:\n{feedback_text}")
 
-            messages: List[ChatMessage] = list(conversation_messages)
-            if target_profile_block:
-                messages.append(ChatMessage(role="user", content=f"Captured socket sample:\n{target_profile_block}"))
-            if feedback_text:
-                messages.append(ChatMessage(role="user", content=f"Feedback from previous attempt:\n{feedback_text}"))
+            messages: List[ChatMessage] = []
+            if attempt_index == 0:
+                messages = list(initial_messages)
+                if target_profile_block:
+                    messages.append(ChatMessage(role="user", content=f"Captured socket sample:\n{target_profile_block}"))
+            else:
+                retry_prompt = _build_socket_retry_prompt(last_raw_output, feedback_text)
+                messages = [
+                    ChatMessage(role="system", content=initial_messages[0].content),
+                    ChatMessage(role="user", content=retry_prompt),
+                ]
+                log_chat("Retry mode enabled: only failed payload + error feedback sent to model")
 
             log_chat(
                 "Model input messages:\n" +
@@ -203,7 +221,6 @@ def generate_command_injection_socket(
             finally:
                 client.close()
 
-            conversation_messages.append(ChatMessage(role="assistant", content=raw_output))
             log_chat("Model output:\n" + raw_output)
 
             raw_messages = split_socket_messages(raw_output)

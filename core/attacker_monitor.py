@@ -20,7 +20,7 @@ MONITOR_PORT = 6666
 
 
 def get_monitor_base_url() -> str:
-    return f"http://{MONITOR_LOOPBACK_HOST}:{MONITOR_PORT}"
+    return f"http://{MONITOR_LISTEN_HOST}:{MONITOR_PORT}"
 
 
 console = Console()
@@ -59,8 +59,10 @@ class AttackerMonitor:
         self.listen_host = MONITOR_LISTEN_HOST
         self.listen_port = MONITOR_PORT
         if parsed and parsed.hostname:
-            # Allow overriding via explicit URL when running standalone CLI.
-            self.listen_host = parsed.hostname
+            # Keep local control channel on loopback, but bind monitor to all interfaces
+            # so target devices can callback to attacker IP (e.g. 192.168.x.x:6666).
+            if parsed.hostname not in {"127.0.0.1", "localhost"}:
+                self.listen_host = parsed.hostname
         if parsed and parsed.port:
             self.listen_port = parsed.port
         self.timeout = timeout
@@ -86,7 +88,21 @@ class AttackerMonitor:
         self._server.parent = self
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
+        if not self._wait_until_ready(timeout=2.0):
+            console.print(
+                f"[yellow]Warning: attacker monitor startup check timed out on http://{self.listen_host}:{self.listen_port};"
+                " continuing anyway"
+            )
         console.print(f"[green]Attacker monitor listening on http://{self.listen_host}:{self.listen_port}")
+
+    def _wait_until_ready(self, timeout: float = 2.0) -> bool:
+        deadline = time.time() + timeout
+        check_url = f"http://{MONITOR_LOOPBACK_HOST}:{self.listen_port}"
+        while time.time() < deadline:
+            if monitor_available(check_url, timeout=0.3):
+                return True
+            time.sleep(0.05)
+        return False
 
     def is_running(self) -> bool:
         return self._server is not None or self._reused_existing
