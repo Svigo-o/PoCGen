@@ -156,28 +156,3 @@ class VulnHandler:
         target_profile: Optional[str] = None,
     ) -> List[dict]:
         raise NotImplementedError
-
-    def post_process(self, raw_output: str) -> List[str]:
-        """Split raw output into individual HTTP messages (as strings)."""
-        # naive split on two consecutive newlines separating requests
-        chunks: List[str] = []
-        buf: List[str] = []
-        for line in raw_output.splitlines():
-            if line.strip() == "" and buf and buf[-1].strip() == "":
-                # double blank -> boundary
-                chunk = "\n".join([l for l in buf if l is not None])
-                if chunk.strip():
-                    chunks.append(chunk.strip())
-                buf = []
-            else:
-                buf.append(line)
-        if buf:
-            chunk = "\n".join(buf).strip()
-            if chunk:
-                chunks.append(chunk)
-        # If still a single block, try to split by two newlines
-        if len(chunks) <= 1:
-            parts = [p.strip() for p in raw_output.strip().split("\n\n") if p.strip()]
-            if len(parts) > 1:
-                return parts
-        return chunks if chunks else ([raw_output.strip()] if raw_output.strip() else [])
