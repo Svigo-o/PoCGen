@@ -115,8 +115,8 @@ def build_prompt_command_injection_http(
     ]
 
 
-def _build_socket_system_prompt(payload: str) -> str:
-    return (
+def _build_socket_system_prompt(payload: str, has_sample: bool = False) -> str:
+    base = (
         "You are a security researcher crafting EXACTLY ONE Socket.IO exploit payload for a command injection vulnerability.\n"
         "You must output a SINGLE JSON object (no markdown, no comments) that conforms to the following schema: \n"
         '{"path": str, "frame": str, "namespace": str|null, "headers": {str:str}, "cookies": str|null, "wait_for_response": bool, "max_response_frames": int}.\n'
@@ -132,6 +132,14 @@ def _build_socket_system_prompt(payload: str) -> str:
         "- Delimiter retry priority for command payloads: first '$(...)', then '`...`', then ';...;' or '&& ...' if prior attempts fail.\n"
         "- Command payload must keep delimiters such as '$(...)', '`...`', ';', '&&' unencoded. DO NOT alter or substitute any IP addresses, URLs, or commands within the '{payload}'."
     )
+    if has_sample:
+        base += (
+            "\n"
+            "Blueprint handling: a sampled Socket.IO interaction is provided—treat it as the primary blueprint. "
+            "Mirror its path, namespace, event name, frame structure, headers, and cookies exactly, only changing "
+            "what is necessary to deliver the injection payload."
+        )
+    return base
 
 
 def build_prompt_command_injection_socket(
@@ -145,6 +153,7 @@ def build_prompt_command_injection_socket(
     vuln_analysis: str | None = None,
 ) -> List[ChatMessage]:
     final_payload = payload or SETTINGS.payload
+    has_sample = bool(target_profile and target_profile.strip())
     user = _build_user_context(
         description=description,
         code_files=code_files,
@@ -154,7 +163,7 @@ def build_prompt_command_injection_socket(
         vuln_analysis=vuln_analysis,
     )
     return [
-        ChatMessage(role="system", content=_build_socket_system_prompt(final_payload)),
+        ChatMessage(role="system", content=_build_socket_system_prompt(final_payload, has_sample=has_sample)),
         ChatMessage(role="user", content=user),
     ]
 
