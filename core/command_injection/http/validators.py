@@ -13,15 +13,14 @@ def validate_http_message(msg: HTTPMessage) -> List[str]:
         errors.append("Missing method or path")
     if "Host" not in msg.headers:
         errors.append("Missing Host header")
-    if "Content-Length" in msg.headers:
-        try:
-            declared = int(msg.headers["Content-Length"]) if msg.headers.get("Content-Length") else 0
-            actual = len(msg.body.encode("utf-8"))
-            if declared != actual:
-                errors.append(f"Content-Length mismatch: declared {declared}, actual {actual}")
-        except Exception:
-            errors.append("Invalid Content-Length header")
+    # Content-Length is auto-corrected by fix_content_length(); no mismatch error needed.
     return errors
+
+
+def fix_content_length(msg: HTTPMessage) -> None:
+    """Auto-correct Content-Length to match actual body byte size."""
+    if msg.body is not None:
+        msg.headers["Content-Length"] = str(len(msg.body.encode("utf-8")))
 
 
 def parse_and_validate(raw: str) -> Tuple[HTTPMessage, List[str]]:

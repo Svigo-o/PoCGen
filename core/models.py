@@ -154,5 +154,8 @@ class VulnHandler:
         target: Optional[str],
         payload: Optional[str] = None,
         target_profile: Optional[str] = None,
+        validation_feedback: Optional[str] = None,
+        vuln_analysis: Optional[str] = None,
+        web_info: Optional[str] = None,
     ) -> List[dict]:
         raise NotImplementedError

@@ -10,8 +10,8 @@ from PoCGen.core.ingest import read_code_files
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate HTTP PoCs for command injection using an LLM")
-    parser.add_argument("--desc", required=False, default=None, help="Path to vulnerability description text file (optional)")
-    parser.add_argument("--code", nargs="+", required=True, help="One or more code file paths or globs")
+    parser.add_argument("--desc", required=False, default=None, help="漏洞描述文件路径（可选）")
+    parser.add_argument("--code", nargs="+", required=False, default=[], help="相关源代码文件路径或 glob（可选）")
     parser.add_argument("--target", help="Optional target base URL")
     parser.add_argument("--vuln-type", default="command_injection_http", help="Vulnerability type handler key")
     parser.add_argument("--temperature", type=float, default=0.1, help="LLM generation temperature")

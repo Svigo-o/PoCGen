@@ -4,13 +4,12 @@ import json
 import os
 import re
 import time
-import urllib.parse
+
 from typing import Any, Dict, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
-from PoCGen.config.config import SETTINGS
 from PoCGen.llm.client import ChatMessage, LLMClient
 
 
@@ -63,7 +62,7 @@ def _http_get_with_retry(
 
 
 # ============================================================================
-# Text Processing Utilities
+# Text / JSON Utilities
 # ============================================================================
 
 
@@ -71,9 +70,7 @@ def _strip_code_fence(text: str) -> str:
     if not text:
         return ""
     m = re.search(r"```(?:\w+)?\s*([\s\S]*?)\s*```", text)
-    if m:
-        return m.group(1).strip()
-    return text.strip()
+    return m.group(1).strip() if m else text.strip()
 
 
 def _extract_json_from_text(text: str) -> Optional[str]:
@@ -94,339 +91,226 @@ def _extract_json_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _dedup(lst: List[str]) -> List[str]:
+    seen: set = set()
+    return [x for x in lst if x not in seen and not seen.add(x)]
+
+
 # ============================================================================
-# NVD Parsers
+# fkie-cad NVD Mirror
 # ============================================================================
 
 
-def _classify_reference_type(url: str) -> str:
-    domain = urllib.parse.urlparse(url).netloc.lower()
-    if "github.com" in domain:
-        return "github"
-    elif any(site in domain for site in ["securityfocus.com", "seclists.org", "packetstormsecurity.com"]):
-        return "security_advisory"
-    elif any(site in domain for site in [".com", ".org", ".net"]):
-        return "vendor"
-    else:
-        return "other"
+def _build_mirror_url(cve_id: str) -> str:
+    parts = cve_id.upper().split("-")
+    if len(parts) != 3:
+        raise ValueError(f"Invalid CVE ID: {cve_id}")
+    year, seq = parts[1], parts[2]
+    group = f"{seq[:2]}xx"
+    return (
+        f"https://raw.githubusercontent.com/fkie-cad/nvd-json-data-feeds/main"
+        f"/CVE-{year}/CVE-{year}-{group}/CVE-{year}-{seq}.json"
+    )
 
 
-def _extract_nvd_description(soup) -> str:
-    desc_elements = soup.find_all(["p", "div"], attrs={
-        "data-testid": lambda x: x and "vuln-description" in x.lower()
-    })
-    for element in desc_elements:
-        text = element.get_text(strip=True)
+def _extract_best_cvss(metrics: dict) -> dict:
+    """Extract the best CVSS record: prefer v3.1 Primary > v3.1 > v3.x."""
+    best: Dict[str, Any] = {}
+    priority = 0
+    for metric_set in metrics.values():
+        if not isinstance(metric_set, list):
+            continue
+        for m in metric_set:
+            cd = m.get("cvssData") or {}
+            ver = cd.get("version", "")
+            is_primary = m.get("type") == "Primary"
+            if ver == "3.1" and is_primary and priority < 3:
+                best = {
+                    "version": ver,
+                    "vectorString": cd.get("vectorString", ""),
+                    "baseScore": cd.get("baseScore"),
+                    "baseSeverity": cd.get("baseSeverity", ""),
+                }
+                priority = 3
+            elif ver == "3.1" and priority < 2:
+                best = {
+                    "version": ver,
+                    "vectorString": cd.get("vectorString", ""),
+                    "baseScore": cd.get("baseScore"),
+                    "baseSeverity": cd.get("baseSeverity", ""),
+                }
+                priority = 2
+            elif ver.startswith("3") and priority < 1:
+                best = {
+                    "version": ver,
+                    "vectorString": cd.get("vectorString", ""),
+                    "baseScore": cd.get("baseScore"),
+                    "baseSeverity": cd.get("baseSeverity", ""),
+                }
+                priority = 1
+    return best
+
+
+def _parse_cve_data(data: dict) -> dict:
+    """Extract structured info from NVD-format CVE JSON (mirror or API)."""
+    cve_id = data.get("id", "")
+
+    description = ""
+    for d in data.get("descriptions") or []:
+        if d.get("lang") == "en" and d.get("value"):
+            description = d["value"]
+            break
+    if not description:
+        descs = data.get("descriptions") or []
+        if descs:
+            description = descs[0].get("value", "")
+
+    cwe_list = _dedup([
+        desc["value"]
+        for w in data.get("weaknesses") or []
+        for desc in w.get("description") or []
+        if desc.get("value", "").startswith("CWE-")
+    ])
+
+    references: List[Dict[str, Any]] = []
+    for ref in data.get("references") or []:
+        url = ref.get("url")
+        if url:
+            references.append({
+                "url": url,
+                "source": ref.get("source", ""),
+                "tags": ref.get("tags", []),
+            })
+
+    affected = _dedup([
+        cpe["criteria"]
+        for cfg in data.get("configurations") or []
+        for node in cfg.get("nodes", [])
+        for cpe in node.get("cpeMatch", [])
+        if cpe.get("vulnerable") and cpe.get("criteria")
+    ])
+
+    return {
+        "cve_id": cve_id,
+        "description": description,
+        "cwe": cwe_list,
+        "cvss": _extract_best_cvss(data.get("metrics", {})),
+        "affected": affected,
+        "references": references,
+    }
+
+
+# ============================================================================
+# Reference Crawlers
+# ============================================================================
+
+
+def _extract_page_text(soup) -> tuple[str, List[str]]:
+    """Extract description text and code blocks from a parsed HTML page."""
+    desc_parts: List[str] = []
+    code_blocks: List[str] = []
+
+    for pre in soup.find_all("pre"):
+        text = pre.get_text(strip=False)
         if text and len(text) > 10:
-            return text
-    for element in soup.find_all(["p", "div"]):
-        text = element.get_text(strip=True)
-        if text and len(text) > 100:
-            if any(keyword in text.lower() for keyword in ["vulnerability", "allows", "could", "attack"]):
-                return text
-    return "未找到描述信息"
+            code_blocks.append(text)
 
-
-def _extract_nvd_references(soup) -> List[Dict[str, str]]:
-    references = []
-    ref_tables = soup.find_all("table", {"data-testid": lambda x: x and "hyperlink" in x.lower()})
-    for table in ref_tables:
-        rows = table.find_all("tr")
-        for row in rows[1:]:
-            link_element = row.find("a")
-            if link_element and link_element.get("href"):
-                link_text = link_element.get_text(strip=True)
-                link_url = link_element.get("href")
-                references.append({
-                    "text": link_text,
-                    "url": link_url,
-                    "type": _classify_reference_type(link_url),
-                })
-    if not references:
-        for link in soup.find_all("a", href=True):
-            url = link.get("href")
-            text = link.get_text(strip=True)
-            if url and not url.startswith("#") and "nvd.nist.gov" not in url:
-                if any(ext in url.lower() for ext in [".com", ".org", ".net", "http", "https"]):
-                    references.append({
-                        "text": text,
-                        "url": url,
-                        "type": _classify_reference_type(url),
-                    })
-    unique_refs = []
-    seen_urls = set()
-    for ref in references:
-        if ref["url"] not in seen_urls:
-            seen_urls.add(ref["url"])
-            unique_refs.append(ref)
-    return unique_refs[:20]
-
-
-def _extract_reference_description(soup, url: str) -> str:
-    description_parts = []
-    domain = urllib.parse.urlparse(url).netloc.lower()
-    if any(site in domain for site in ["securityfocus.com", "seclists.org", "packetstormsecurity.com"]):
-        for elem in soup.find_all(["pre", "div", "article"]):
-            text = elem.get_text(strip=True)
-            if text and len(text) > 200 and "vulnerability" in text.lower():
-                description_parts.append(text[:1000])
+    for tag in ("article", "main", "div.content", "div.post-content", "div.entry-content", "div.markdown-body"):
+        for elem in soup.find_all(tag):
+            for child in elem.find_all(["p", "div"]):
+                if child.find_parent("pre"):
+                    continue
+                text = child.get_text(strip=True)
+                if text and len(text) > 20:
+                    desc_parts.append(text)
+            if desc_parts:
                 break
-    elif any(site in domain for site in [".com", ".org", ".net"]):
-        for tag in ["article", "main", "div.content", "div.post-content", "div.entry-content"]:
-            elements = soup.find_all(tag)
-            for elem in elements:
-                text = elem.get_text(strip=True)
-                if text and len(text) > 300:
-                    description_parts.append(text)
-                    break
-            if description_parts:
-                break
-    if not description_parts:
-        paragraphs = soup.find_all("p")
-        for p in paragraphs[:6]:
+        if desc_parts:
+            break
+
+    if not desc_parts:
+        for p in soup.find_all("p")[:10]:
             text = p.get_text(strip=True)
             if text and len(text) > 30:
-                description_parts.append(text)
-    if not description_parts:
-        all_text = soup.get_text()
-        cleaned_text = re.sub(r"\s+", " ", all_text)
-        if len(cleaned_text) > 200:
-            description_parts.append(cleaned_text[:1000])
-    return "\n\n".join(description_parts) if description_parts else "未能提取到描述信息"
+                desc_parts.append(text)
+
+    description = "\n\n".join(desc_parts)[:2000] if desc_parts else ""
+    return description, code_blocks
 
 
-def _extract_reference_code_blocks(soup) -> List[str]:
-    code_blocks = []
-    for pre in soup.find_all("pre"):
-        code_text = pre.get_text(strip=False)
-        if code_text and len(code_text) > 10:
-            code_blocks.append(code_text)
-    for code in soup.find_all("code"):
-        code_text = code.get_text(strip=False)
-        if code_text and len(code_text) > 50:
-            code_blocks.append(code_text)
-    return code_blocks
-
-
-# ============================================================================
-# GitHub Parsers
-# ============================================================================
-
-
-def _parse_github_markdown_content(md_content: str, url: str) -> Dict[str, Any]:
-    content_info: Dict[str, Any] = {"description": "", "code_blocks": []}
-    lines = md_content.split("\n")
-    in_code_block = False
-    current_code_block: List[str] = []
-    for line in lines:
-        line = line.rstrip()
-        if line.strip().startswith("```"):
-            if in_code_block:
-                if current_code_block:
-                    content_info["code_blocks"].append("\n".join(current_code_block))
-                    current_code_block = []
-                in_code_block = False
-            else:
-                in_code_block = True
-            continue
-        if in_code_block:
-            current_code_block.append(line)
-            continue
-        if line.strip() and not line.startswith("#"):
-            if len(content_info["description"]) < 1000:
-                content_info["description"] += line + "\n"
-    if current_code_block:
-        content_info["code_blocks"].append("\n".join(current_code_block))
-    content_info["description"] = content_info["description"].strip()
-    return content_info
-
-
-def _extract_from_github_page(github_url: str) -> Dict[str, Any]:
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = _http_get_with_retry(github_url, headers=headers, timeout=10, max_retries=3)
-        if resp.status_code != 200:
-            return {"description": f"访问GitHub页面失败，状态码: {resp.status_code}", "code_blocks": []}
-        soup = BeautifulSoup(resp.content, "html.parser")
-        content_info: Dict[str, Any] = {"description": "", "code_blocks": []}
-        md_content_div = soup.find("div", {"class": "markdown-body"})
-        if md_content_div:
-            for pre in md_content_div.find_all("pre"):
-                code_text = pre.get_text(strip=False)
-                if code_text:
-                    content_info["code_blocks"].append(code_text)
-            for element in md_content_div.find_all(["p", "div"]):
-                if element.find_parent("pre"):
-                    continue
-                text = element.get_text(strip=True)
-                if text and len(text) > 20:
-                    content_info["description"] += text + "\n"
-        if not content_info["description"]:
-            article = soup.find("article")
-            if article:
-                for pre in article.find_all("pre"):
-                    code_text = pre.get_text(strip=False)
-                    if code_text:
-                        content_info["code_blocks"].append(code_text)
-                for element in article.find_all(["p", "div"]):
-                    if element.find_parent("pre"):
-                        continue
-                    text = element.get_text(strip=True)
-                    if text and len(text) > 20:
-                        content_info["description"] += text + "\n"
-        content_info["description"] = content_info["description"].strip()[:1000]
-        return content_info
-    except Exception as e:
-        return {"description": f"解析GitHub页面失败: {e}", "code_blocks": []}
-
-
-# ============================================================================
-# Public CVE Collection Functions
-# ============================================================================
-
-
-def get_cve_info(cve_id: str) -> str:
-    if not re.match(r"^CVE-\d{4}-\d+$", cve_id, re.IGNORECASE):
-        return json.dumps({
-            "error": f"CVE编号格式不正确: {cve_id}",
-            "correct_format": "CVE-YYYY-NNNNN",
-        }, ensure_ascii=False)
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    }
-
-    detail_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}".strip()
-    api_url = f"https://services.nvd.nist.gov/rest/json/cve/2.0/{cve_id}".strip()
-
-    try:
-        try:
-            api_resp = _http_get_with_retry(api_url, headers=headers, timeout=20, max_retries=3)
-            data = api_resp.json()
-            vulns = data.get("vulnerabilities") or []
-            if vulns:
-                cve_obj = vulns[0].get("cve", {})
-                descriptions = cve_obj.get("descriptions") or []
-                description = ""
-                for d in descriptions:
-                    if d.get("lang") == "en" and d.get("value"):
-                        description = d["value"]
-                        break
-                if not description and descriptions:
-                    description = descriptions[0].get("value", "")
-                references = []
-                for ref in cve_obj.get("references") or []:
-                    ref_url = ref.get("url")
-                    if not ref_url:
-                        continue
-                    ref_text = ref.get("source") or ref_url
-                    references.append({
-                        "text": ref_text,
-                        "url": ref_url,
-                        "type": _classify_reference_type(ref_url),
-                    })
-                if description or references:
-                    return json.dumps({
-                        "cve_id": cve_id,
-                        "description": description or "",
-                        "references": references,
-                        "success": True,
-                        "source": "nvd_api",
-                    }, ensure_ascii=False)
-        except Exception:
-            pass
-
-        page_resp = _http_get_with_retry(detail_url, headers=headers, timeout=20, max_retries=3)
-        if page_resp.status_code == 404:
-            return json.dumps({"error": f"CVE {cve_id} 不存在或在NVD库中未找到"})
-        if page_resp.status_code != 200:
-            return json.dumps({"error": f"NVD库请求失败，状态码: {page_resp.status_code}"})
-
-        soup = BeautifulSoup(page_resp.content, "html.parser")
-        description = _extract_nvd_description(soup)
-        references = _extract_nvd_references(soup)
-        return json.dumps({
-            "cve_id": cve_id,
-            "description": description,
-            "references": references,
-            "success": True,
-            "source": "nvd_html",
-        }, ensure_ascii=False)
-
-    except Exception as e:
-        return json.dumps({"error": f"请求错误: {e}"}, ensure_ascii=False)
-
-
-def crawl_reference(reference_url: str) -> str:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    }
-    try:
-        if "github.com" in reference_url:
-            return crawl_github(reference_url)
-        time.sleep(1)
-        resp = _http_get_with_retry(reference_url, headers=headers, timeout=15, max_retries=3)
-        if resp.status_code != 200:
-            return json.dumps({
-                "success": False,
-                "error": f"HTTP请求失败，状态码: {resp.status_code}",
-                "url": reference_url,
-            }, ensure_ascii=False)
-
-        soup = BeautifulSoup(resp.content, "html.parser")
-        title_tag = soup.find("title")
-        page_title = title_tag.get_text(strip=True) if title_tag else "无标题"
-        description = _extract_reference_description(soup, reference_url)
-        code_blocks = _extract_reference_code_blocks(soup)
-        return json.dumps({
-            "success": True,
-            "url": reference_url,
-            "title": page_title,
-            "description": description,
-            "code_blocks": code_blocks,
-            "content_type": "web_page",
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": f"爬取参考链接时出错: {e}",
-            "url": reference_url,
-        }, ensure_ascii=False)
-
-
-def crawl_github(github_url: str) -> str:
+def crawl_github(github_url: str) -> Dict[str, Any]:
     if not github_url or "github.com" not in github_url:
-        return json.dumps({"success": False, "error": "不是有效的GitHub链接"}, ensure_ascii=False)
+        return {"success": False, "error": "Not a GitHub URL", "url": github_url}
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         raw_url = github_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
         response = None
         try:
-            response = _http_get_with_retry(raw_url, headers=headers, timeout=10, max_retries=3)
+            response = _http_get_with_retry(raw_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10, max_retries=3)
         except Exception:
             response = None
 
         if response is not None and response.status_code == 200:
-            result = _parse_github_markdown_content(response.text, github_url)
+            text = response.text
+            if text.strip().startswith("#") or "markdown" in (response.headers.get("Content-Type") or "").lower():
+                result = _parse_markdown(text)
+            else:
+                result = {"description": text[:2000], "code_blocks": []}
         else:
-            result = _extract_from_github_page(github_url)
+            resp = _http_get_with_retry(github_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10, max_retries=3)
+            if resp.status_code != 200:
+                return {"success": False, "error": f"HTTP {resp.status_code}", "url": github_url}
+            soup = BeautifulSoup(resp.content, "html.parser")
+            desc, code_blocks = _extract_page_text(soup)
+            result = {"description": desc, "code_blocks": code_blocks}
 
         result["success"] = True
         result["url"] = github_url
-        result["content_type"] = "github"
-        return json.dumps(result, ensure_ascii=False)
+        return result
     except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": f"爬取GitHub链接时出错: {e}",
-            "url": github_url,
-        }, ensure_ascii=False)
+        return {"success": False, "error": str(e), "url": github_url}
+
+
+def _parse_markdown(md: str) -> Dict[str, Any]:
+    info: Dict[str, Any] = {"description": "", "code_blocks": []}
+    in_code = False
+    code_buf: List[str] = []
+    for line in md.split("\n"):
+        line = line.rstrip()
+        if line.strip().startswith("```"):
+            if in_code:
+                if code_buf:
+                    info["code_blocks"].append("\n".join(code_buf))
+                    code_buf = []
+                in_code = False
+            else:
+                in_code = True
+            continue
+        if in_code:
+            code_buf.append(line)
+            continue
+        if line.strip() and not line.startswith("#") and len(info["description"]) < 2000:
+            info["description"] += line + "\n"
+    if code_buf:
+        info["code_blocks"].append("\n".join(code_buf))
+    info["description"] = info["description"].strip()
+    return info
+
+
+def crawl_reference(url: str) -> Dict[str, Any]:
+    if "github.com" in url:
+        return crawl_github(url)
+
+    try:
+        time.sleep(1)
+        resp = _http_get_with_retry(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, max_retries=3)
+        if resp.status_code != 200:
+            return {"success": False, "error": f"HTTP {resp.status_code}", "url": url}
+        soup = BeautifulSoup(resp.content, "html.parser")
+        desc, code_blocks = _extract_page_text(soup)
+        return {"success": True, "url": url, "description": desc, "code_blocks": code_blocks}
+    except Exception as e:
+        return {"success": False, "error": str(e), "url": url}
 
 
 # ============================================================================
@@ -434,110 +318,166 @@ def crawl_github(github_url: str) -> str:
 # ============================================================================
 
 
-def get_web_infomation(cve_str: str) -> None:
-    """Collect CVE information from NVD and references, then consolidate with LLM.
+def get_web_infomation(cve_str: str, force: bool = False) -> Optional[dict]:
+    """Collect CVE info from fkie-cad mirror + reference crawling, then consolidate.
 
-    1. Query NVD API (fallback to HTML) for description + references
-    2. Crawl up to 5 reference links for additional details
-    3. Use LLM to consolidate into {info, reason, webpoc} JSON
-    4. Save to output/searchResult/
+    1. Fetch CVE JSON from fkie-cad mirror (fallback to NVD API)
+    2. Crawl reference links (prioritise "Exploit" tagged)
+    3. Consolidate via LLM into {info, reason, webpoc}
+    4. Save to output/cve_cache/{CVE-ID}.json
+
+    If a result already exists and force=False, return the cached result.
     """
-    collected: Dict[str, Any] = {"descriptions": [], "code_blocks": []}
+    cve_id = cve_str.upper().strip()
+    if not re.match(r"^CVE-\d{4}-\d+$", cve_id):
+        print(f"Invalid CVE format: {cve_str}")
+        return None
 
-    # Step 1: NVD data
+    out_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "output", "cve_cache"))
+    os.makedirs(out_dir, exist_ok=True)
+    result_path = os.path.join(out_dir, f"{cve_id}.json")
+
+    # Dedup
+    if not force and os.path.isfile(result_path):
+        print(f"[cache] Reusing existing result: {result_path}")
+        with open(result_path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+
+    # ---------------------------------------------------------------
+    # Step 1: Fetch CVE data (mirror -> NVD API)
+    # ---------------------------------------------------------------
+    parsed: Optional[dict] = None
     try:
-        resp = get_cve_info(cve_str)
-        data = {}
+        resp = _http_get_with_retry(_build_mirror_url(cve_id), headers={"User-Agent": "Mozilla/5.0"}, timeout=20, max_retries=3)
+        if resp.status_code == 200:
+            parsed = _parse_cve_data(resp.json())
+            print("[mirror] Fetched from fkie-cad mirror")
+    except Exception as exc:
+        print(f"[mirror] Failed: {exc}, trying NVD API")
+
+    if parsed is None:
         try:
-            data = json.loads(resp)
-        except Exception:
-            data = {}
+            resp = _http_get_with_retry(
+                f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=20, max_retries=3,
+            )
+            vulns = resp.json().get("vulnerabilities") or []
+            if vulns:
+                parsed = _parse_cve_data(vulns[0].get("cve", {}))
+                parsed["cve_id"] = cve_id
+                print("[nvd-api] Fetched from NVD API")
+        except Exception as exc:
+            print(f"[nvd-api] Failed: {exc}")
 
-        if isinstance(data, dict):
-            desc = data.get("description") or ""
-            if desc:
-                collected["descriptions"].append(desc)
-            refs = data.get("references") or []
-        else:
-            refs = []
+    if parsed is None:
+        print(f"Failed to fetch CVE data for {cve_id}")
+        return None
 
-        # Step 2: Crawl references (limit to 5 to avoid excessive requests)
-        for r in refs[:5]:
-            try:
-                url = r.get("url") if isinstance(r, dict) else r
-                if not url:
-                    continue
-                if "github.com" in url:
-                    out = crawl_github(url)
-                else:
-                    out = crawl_reference(url)
-                try:
-                    j = json.loads(out)
-                except Exception:
-                    j = {}
-                if isinstance(j, dict) and j.get("success"):
-                    d = j.get("description") or ""
-                    if d:
-                        collected["descriptions"].append(d)
-                    for cb in j.get("code_blocks") or []:
-                        if cb and isinstance(cb, str):
-                            collected["code_blocks"].append(cb)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    collected: Dict[str, Any] = {
+        "descriptions": [parsed["description"]] if parsed.get("description") else [],
+        "code_blocks": [],
+        "cwe": parsed.get("cwe", []),
+        "cvss": parsed.get("cvss", {}),
+        "affected": parsed.get("affected", []),
+    }
 
+    # ---------------------------------------------------------------
+    # Step 2: Crawl references (Exploit-tagged first)
+    # ---------------------------------------------------------------
+    refs = parsed.get("references") or []
+    exploit_first = sorted(refs, key=lambda r: 0 if "Exploit" in (r.get("tags") or []) else 1)
+
+    for r in exploit_first[:8]:
+        url = r.get("url")
+        if not url:
+            continue
+        print(f"[crawl] {url}  (tags: {', '.join(r.get('tags') or []) or 'none'})")
+        try:
+            result = crawl_reference(url)
+            if result.get("success"):
+                if result.get("description"):
+                    collected["descriptions"].append(result["description"])
+                collected["code_blocks"].extend(cb for cb in result.get("code_blocks") or [] if cb)
+            else:
+                print(f"[crawl] Failed: {result.get('error', 'unknown')}")
+        except Exception as exc:
+            print(f"[crawl] Error: {exc}")
+
+    # ---------------------------------------------------------------
     # Step 3: LLM consolidation
+    # ---------------------------------------------------------------
     consolidated: Dict[str, Any] = {"info": "", "reason": "", "webpoc": ""}
     try:
         client = LLMClient()
         try:
             prompt_parts = [
-                "You are given collected vulnerability information fragments. Consolidate them into a JSON object with exactly three keys: info, reason, webpoc.",
-                "Return ONLY the JSON object, no explanation. If a field is empty, use an empty string.",
+                "Consolidate the following vulnerability information into a JSON object with exactly three keys: info, reason, webpoc.",
+                "- info: concise vulnerability description (product, version, vuln type, attack vector, impact). Max 3 sentences.",
+                "- reason: technical root cause (which function/parameter is vulnerable, how the attack works).",
+                "- webpoc: raw HTTP PoC request if available; otherwise the exploit script. Empty string if none.",
+                "Return ONLY the JSON object, no explanation.",
             ]
-            descs = collected.get("descriptions") or []
-            if descs:
-                prompt_parts.append("Collected descriptions:\n" + "\n\n---\n\n".join(descs[:8]))
-            cbs = collected.get("code_blocks") or []
-            if cbs:
-                brief_cbs = [cb[:4000] if len(cb) > 4000 else cb for cb in cbs[:6]]
-                prompt_parts.append("Collected code blocks:\n" + "\n\n---\n\n".join(brief_cbs))
-            prompt = "\n\n".join(prompt_parts)
-            reply = client.chat([ChatMessage(role="user", content=prompt)], temperature=0, max_tokens=800)
+            if collected["cwe"]:
+                prompt_parts.append(f"CWE: {', '.join(collected['cwe'])}")
+            if collected["cvss"]:
+                prompt_parts.append(
+                    f"CVSS: {collected['cvss'].get('vectorString', '')} "
+                    f"(score: {collected['cvss'].get('baseScore', 'N/A')}, "
+                    f"severity: {collected['cvss'].get('baseSeverity', 'N/A')})"
+                )
+            if collected["affected"]:
+                prompt_parts.append("Affected: " + ", ".join(collected["affected"][:5]))
+            if collected["descriptions"]:
+                prompt_parts.append("Descriptions:\n" + "\n---\n".join(collected["descriptions"][:10]))
+            if collected["code_blocks"]:
+                brief = [cb[:3000] for cb in collected["code_blocks"][:6]]
+                prompt_parts.append("Code / PoC blocks:\n" + "\n---\n".join(brief))
+
+            reply = client.chat(
+                [ChatMessage(role="user", content="\n\n".join(prompt_parts))],
+                temperature=0, max_tokens=3000,
+            )
             json_candidate = _extract_json_from_text(reply)
             if json_candidate:
-                parsed = json.loads(json_candidate)
-                if isinstance(parsed, dict):
+                parsed_llm = json.loads(json_candidate)
+                if isinstance(parsed_llm, dict):
                     consolidated = {
-                        "info": parsed.get("info") or "",
-                        "reason": parsed.get("reason") or "",
-                        "webpoc": parsed.get("webpoc") or "",
+                        "info": parsed_llm.get("info") or "",
+                        "reason": parsed_llm.get("reason") or "",
+                        "webpoc": parsed_llm.get("webpoc") or "",
                     }
         finally:
             client.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[llm] LLM consolidation failed: {exc}")
 
-    # Fallback: if LLM consolidation failed, build from raw collected data
-    if not consolidated["info"] and (collected.get("descriptions") or []):
-        consolidated["info"] = "\n\n".join(collected.get("descriptions")[:10])[:4000]
-    if not consolidated["webpoc"] and (collected.get("code_blocks") or []):
-        found = ""
-        for cb in collected.get("code_blocks"):
+    # Fallback: build from raw data if LLM didn't fill fields
+    if not consolidated["info"] and collected["descriptions"]:
+        consolidated["info"] = collected["descriptions"][0][:1000]
+
+    if not consolidated["reason"]:
+        parts = []
+        if collected["cwe"]:
+            parts.append(f"Weakness: {', '.join(collected['cwe'])}")
+        if collected["cvss"]:
+            parts.append(f"CVSS {collected['cvss'].get('baseScore', 'N/A')} ({collected['cvss'].get('baseSeverity', '')})")
+        consolidated["reason"] = "; ".join(parts)
+
+    if not consolidated["webpoc"] and collected["code_blocks"]:
+        for cb in collected["code_blocks"]:
             if re.search(r"^(GET|POST)\s+.*HTTP/\d\.\d", cb, flags=re.I | re.M):
-                found = cb
+                consolidated["webpoc"] = cb.strip()
                 break
-        if not found and collected.get("code_blocks"):
-            found = collected.get("code_blocks")[0]
-        consolidated["webpoc"] = (found or "").strip()
+        if not consolidated["webpoc"]:
+            for cb in collected["code_blocks"]:
+                if "requests." in cb or "curl" in cb:
+                    consolidated["webpoc"] = cb[:3000].strip()
+                    break
 
+    # ---------------------------------------------------------------
     # Step 4: Save
-    ts = time.strftime("%Y%m%d_%H%M")
-    out_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "output", "searchResult"))
-    os.makedirs(out_dir, exist_ok=True)
-    fname = f"{ts}_{cve_str}_info.json"
-    fpath = os.path.join(out_dir, fname)
-    with open(fpath, "w", encoding="utf-8") as fh:
+    # ---------------------------------------------------------------
+    with open(result_path, "w", encoding="utf-8") as fh:
         json.dump(consolidated, fh, ensure_ascii=False, indent=2)
-    print(f"Saved CVE info to: {fpath}")
+    print(f"Saved CVE info to: {result_path}")
+    return consolidated

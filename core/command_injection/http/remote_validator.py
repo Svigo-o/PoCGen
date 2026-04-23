@@ -8,6 +8,23 @@ from PoCGen.config.config import SETTINGS
 from PoCGen.core.models import HTTPMessage, ValidationResult
 
 
+def _classify_connection_error(exc: Exception, raw_msg: str) -> str:
+    """Produce a more actionable error message from httpx connection failures."""
+    exc_type = type(exc).__name__
+    msg = raw_msg.lower()
+    if "timed out" in msg or "timeout" in msg or exc_type == "ConnectTimeout":
+        return f"Connection timed out (target may be down, firewall blocking, or Cookie expired): {raw_msg}"
+    if "refused" in msg or exc_type == "ConnectionRefusedError":
+        return f"Connection refused (target port not listening or service crashed): {raw_msg}"
+    if "reset" in msg:
+        return f"Connection reset by peer (target rejected the request, possibly WAF or auth issue): {raw_msg}"
+    if "ssl" in msg or "certificate" in msg or "tls" in msg:
+        return f"SSL/TLS error: {raw_msg}"
+    if "name" in msg and "resolve" in msg:
+        return f"DNS resolution failed (target hostname unreachable): {raw_msg}"
+    return f"{exc_type}: {raw_msg}"
+
+
 def _resolve_url(message: HTTPMessage, target: str) -> str:
     from urllib.parse import urljoin
 
@@ -65,13 +82,15 @@ def validate_http_requests(
                     )
                 )
             except Exception as exc:
+                error_msg = str(exc)
+                diagnostic = _classify_connection_error(exc, error_msg)
                 results.append(
                     ValidationResult(
                         request_index=idx,
                         url=str(url),
                         status_code=None,
                         success=False,
-                        error=str(exc),
+                        error=diagnostic,
                     )
                 )
     finally:

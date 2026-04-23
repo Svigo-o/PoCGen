@@ -29,13 +29,16 @@ from PoCGen.core.models import (
     VulnHandler,
 )
 from .postprocess import save_messages, split_messages
-from .validators import parse_and_validate
+from .validators import parse_and_validate, fix_content_length
 from .remote_validator import validate_http_requests
 
 console = Console()
 
 
-def _build_http_retry_prompt(previous_raw_output: str, feedback_text: Optional[str]) -> str:
+_DELIMITER_ORDER = ["$()", "`...`", ";...;"]
+
+
+def _build_http_retry_prompt(previous_raw_output: str, feedback_text: Optional[str], attempt_index: int = 1) -> str:
     parts: List[str] = [
         "Previous generated request failed. Generate ONE corrected raw HTTP request.",
         "Keep output format unchanged: exactly one raw HTTP request with headers and body.",
@@ -43,6 +46,13 @@ def _build_http_retry_prompt(previous_raw_output: str, feedback_text: Optional[s
     ]
     if feedback_text:
         parts.append("Error report for correction:\n" + feedback_text)
+    delim_idx = min(attempt_index, len(_DELIMITER_ORDER) - 1)
+    forced_delim = _DELIMITER_ORDER[delim_idx]
+    parts.append(
+        f"MANDATORY delimiter change for this attempt: you MUST use the '{forced_delim}' injection style. "
+        f"Do NOT reuse the delimiter from the failed request. Delimiter rotation order: {', '.join(_DELIMITER_ORDER)}. "
+        f"This is attempt #{attempt_index + 1}, so use '{forced_delim}'."
+    )
     return "\n\n".join(parts)
 
 
@@ -58,6 +68,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
         target_profile: Optional[str] = None,
         validation_feedback: Optional[str] = None,
         vuln_analysis: Optional[str] = None,
+        web_info: Optional[str] = None,
     ) -> List[dict]:
         msgs = build_prompt_command_injection_http(
             description=description,
@@ -67,6 +78,7 @@ class CommandInjectionHTTPHandler(VulnHandler):
             target_profile=target_profile,
             validation_feedback=validation_feedback,
             vuln_analysis=vuln_analysis,
+            web_info=web_info,
         )
         return [m.model_dump() for m in msgs]
 
@@ -98,8 +110,27 @@ def generate_command_injection_http(
     handler_key = vuln_type or CommandInjectionHTTPHandler.name
     handler = CommandInjectionHTTPHandler()
     final_payload = payload or SETTINGS.payload
+    web_info_block: Optional[str] = None
     if cvenumber:
-        get_web_infomation(cvenumber)
+        web_data = get_web_infomation(cvenumber)
+        if web_data:
+            parts = []
+            if web_data.get("info"):
+                parts.append(f"Vulnerability Summary: {web_data['info']}")
+            if web_data.get("reason"):
+                parts.append(f"Root Cause: {web_data['reason']}")
+            if web_data.get("webpoc"):
+                parts.append(f"Known PoC:\n{web_data['webpoc']}")
+            web_info_block = "\n\n".join(parts)
+
+    if cvenumber and description:
+        import re
+        desc_cves = set(re.findall(r'CVE-\d{4}-\d{4,}', description, re.IGNORECASE))
+        if desc_cves and cvenumber.upper() not in {c.upper() for c in desc_cves}:
+            console.print(
+                f"[bold red]WARNING: --CVENumber {cvenumber} does not match CVE(s) found in description: {', '.join(sorted(desc_cves))}. "
+                f"Web crawl data may describe a different vulnerability!"
+            )
 
     chat_log_dir = Path(__file__).resolve().parent.parent.parent.parent / "logs" / "chat"
     chat_log_dir.mkdir(parents=True, exist_ok=True)
@@ -167,15 +198,6 @@ def generate_command_injection_http(
     monitor: Optional[AttackerMonitor] = None
     external_monitor_url: Optional[str] = None
     monitor_base_url = get_monitor_base_url()
-    initial_messages: List[ChatMessage] = [ChatMessage(**m) for m in handler.build_messages(
-        description,
-        code_texts,
-        target,
-        final_payload,
-        None,
-        None,
-        vuln_analysis_block,
-    )]
     monitor_running = False
     if auto_validate:
         if monitor_available(monitor_base_url):
@@ -220,6 +242,18 @@ def generate_command_injection_http(
             else:
                 console.print("[yellow]probe_target currently requires --browser-login; skipping target sampling")
 
+        # Build initial messages AFTER sampling so target_profile is available
+        initial_messages: List[ChatMessage] = [ChatMessage(**m) for m in handler.build_messages(
+            description,
+            code_texts,
+            target,
+            final_payload,
+            target_profile_block,
+            None,
+            vuln_analysis_block,
+            web_info_block,
+        )]
+
         for attempt_index in range(max_iters):
             console.print(f"\n[bold]Attempt {attempt_index + 1}/{max_iters}[/bold]")
 
@@ -231,17 +265,13 @@ def generate_command_injection_http(
             if attempt_index == 0:
                 messages = list(initial_messages)
             else:
-                retry_prompt = _build_http_retry_prompt(last_raw_output, feedback_text)
+                retry_prompt = _build_http_retry_prompt(last_raw_output, feedback_text, attempt_index)
                 messages = [
                     ChatMessage(role="system", content=initial_messages[0].content),
+                    ChatMessage(role="user", content=initial_messages[1].content),
                     ChatMessage(role="user", content=retry_prompt),
                 ]
-                log_chat("Retry mode enabled: only failed request + error feedback sent to model")
-
-            if attempt_index == 0 and target_profile_block:
-                messages.append(ChatMessage(role="user", content=f"Updated target profile:\n{target_profile_block}"))
-            if attempt_index == 0 and feedback_text:
-                messages.append(ChatMessage(role="user", content=f"Feedback from previous attempt:\n{feedback_text}"))
+                log_chat("Retry mode enabled: full context + failed request + error feedback sent to model")
 
             log_chat(
                 "Model input messages:\n" +
@@ -272,6 +302,7 @@ def generate_command_injection_http(
             for idx, raw in enumerate(raw_messages):
                 try:
                     msg, errs = parse_and_validate(raw)
+                    fix_content_length(msg)
                     requests.append(msg)
                     if errs:
                         for err in errs:
@@ -285,7 +316,8 @@ def generate_command_injection_http(
             if auto_validate and target and requests:
                 if sample_cookies_header:
                     for req in requests:
-                        if "Cookie" not in req.headers:
+                        existing = req.headers.get("Cookie", "")
+                        if "Cookie" not in req.headers or "REPLACE_ME" in existing or not existing.strip():
                             req.headers["Cookie"] = sample_cookies_header
                 try:
                     validation_results = validate_http_requests(requests, target)

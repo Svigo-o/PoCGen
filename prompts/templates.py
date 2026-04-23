@@ -68,6 +68,7 @@ def _build_user_context(
     target_profile: str | None,
     validation_feedback: str | None,
     vuln_analysis: str | None = None,
+    web_info: str | None = None,
 ) -> str:
     user_parts: List[str] = []
     user_parts.append("Vulnerability Description:\n" + description.strip())
@@ -75,6 +76,10 @@ def _build_user_context(
         user_parts.append(f"Target Hint: {target}")
     if target_profile:
         user_parts.append(target_profile)
+    if web_info:
+        user_parts.append(
+            "CVE Web Intelligence (from NVD and reference crawling):\n" + web_info.strip()
+        )
     if vuln_analysis:
         user_parts.append(
             "Vulnerability Analysis Results (from source-code and binary analysis – use these as the primary reference for the exploit structure):\n"
@@ -98,6 +103,7 @@ def build_prompt_command_injection_http(
     target_profile: str | None = None,
     validation_feedback: str | None = None,
     vuln_analysis: str | None = None,
+    web_info: str | None = None,
 ) -> List[ChatMessage]:
     final_payload = payload or SETTINGS.payload
     has_sample = bool(target_profile and target_profile.strip())
@@ -108,6 +114,7 @@ def build_prompt_command_injection_http(
         target_profile=target_profile,
         validation_feedback=validation_feedback,
         vuln_analysis=vuln_analysis,
+        web_info=web_info,
     )
     return [
         ChatMessage(role="system", content=_build_http_system_prompt(final_payload, has_sample=has_sample)),
@@ -151,6 +158,7 @@ def build_prompt_command_injection_socket(
     target_profile: str | None = None,
     validation_feedback: str | None = None,
     vuln_analysis: str | None = None,
+    web_info: str | None = None,
 ) -> List[ChatMessage]:
     final_payload = payload or SETTINGS.payload
     has_sample = bool(target_profile and target_profile.strip())
@@ -161,6 +169,7 @@ def build_prompt_command_injection_socket(
         target_profile=target_profile,
         validation_feedback=validation_feedback,
         vuln_analysis=vuln_analysis,
+        web_info=web_info,
     )
     return [
         ChatMessage(role="system", content=_build_socket_system_prompt(final_payload, has_sample=has_sample)),
