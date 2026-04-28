@@ -21,9 +21,18 @@ from PoCGen.core.ida_mcp_client import _log
 
 console = Console()
 
-# Default paths
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-_IDALIB_MCP_BIN = os.path.join(_PROJECT_ROOT, "ida-mcp-env", ".venv", "bin", "idalib-mcp")
+
+
+def _default_idalib_mcp_bin() -> str:
+    env_override = os.getenv("POCGEN_IDA_MCP_BIN")
+    if env_override:
+        return env_override
+
+    main_venv_bin = os.path.join(_PROJECT_ROOT, ".venv", "bin", "idalib-mcp")
+    if os.path.exists(main_venv_bin):
+        return main_venv_bin
+    return main_venv_bin
 
 
 class IDAMCPService:
@@ -38,7 +47,7 @@ class IDAMCPService:
     ) -> None:
         self.binary_path = binary_path
         self.mcp_url = mcp_url.rstrip("/")
-        self.idalib_mcp_bin = idalib_mcp_bin or _IDALIB_MCP_BIN
+        self.idalib_mcp_bin = idalib_mcp_bin or _default_idalib_mcp_bin()
         self.startup_timeout = startup_timeout
         self._process: Optional[subprocess.Popen] = None
         self._was_already_running = False

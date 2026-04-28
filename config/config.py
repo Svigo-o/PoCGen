@@ -15,6 +15,16 @@ OUTPUT_ROOT_DEFAULT = os.getenv(
 # Load .env if present
 load_dotenv()
 
+_MAIN_IDA_MCP_BIN = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", ".venv", "bin", "idalib-mcp")
+)
+
+
+def _default_ida_mcp_bin() -> str:
+    if os.path.exists(_MAIN_IDA_MCP_BIN):
+        return _MAIN_IDA_MCP_BIN
+    return _MAIN_IDA_MCP_BIN
+
 
 class ProviderSettings(BaseModel):
     base_url: str
@@ -23,7 +33,7 @@ class ProviderSettings(BaseModel):
 
 
 class LLMSettings(BaseModel):
-    timeout_seconds: int = Field(default=int(os.getenv("POCGEN_TIMEOUT", "60")))
+    timeout_seconds: int = Field(default=int(os.getenv("POCGEN_TIMEOUT", "120")))
     providers: Dict[str, ProviderSettings] = Field(default_factory=dict)
     default_provider: str = Field(default=os.getenv("POCGEN_DEFAULT_PROVIDER", "deepseek"))
 
@@ -32,19 +42,14 @@ class LLMSettings(BaseModel):
         providers = values.get("providers") or {}
         if not providers:
             providers = {
-                "qwen": ProviderSettings(
-                    base_url=os.getenv("POCGEN_QWEN_BASE_URL", "http://222.20.126.36:30000/v1"),
-                    api_key=os.getenv("POCGEN_QWEN_API_KEY", "QWEN3@C402"),
-                    model=os.getenv("POCGEN_QWEN_MODEL", "qwen"),
-                ),
                 "deepseek": ProviderSettings(
-                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
-                    api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                    base_url=os.getenv("POCGEN_DS_BASE_URL", ""),
+                    api_key=os.getenv("POCGEN_DS_API_KEY", ""),
                     model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
                 ),
                 "glm": ProviderSettings(
-                    base_url=os.getenv("POCGEN_GLM_BASE_URL", "http://222.20.126.10:33330/v1"),
-                    api_key=os.getenv("POCGEN_GLM_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                    base_url=os.getenv("POCGEN_GLM_BASE_URL", ""),
+                    api_key=os.getenv("POCGEN_GLM_API_KEY", ""),
                     model=os.getenv("POCGEN_GLM_MODEL", "glm-5.1-fp8")
                 )                
             }
@@ -93,7 +98,7 @@ class AppSettings(BaseModel):
     ida_mcp_bin: str = Field(
         default=os.getenv(
             "POCGEN_IDA_MCP_BIN",
-            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ida-mcp-env", ".venv", "bin", "idalib-mcp")),
+            _default_ida_mcp_bin(),
         )
     )
     ida_mcp_startup_timeout: float = Field(default=float(os.getenv("POCGEN_IDA_MCP_STARTUP_TIMEOUT", "120")))

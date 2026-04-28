@@ -14,13 +14,15 @@ PoCGen 将"漏洞描述 + 相关代码片段"转化为可直接落盘的原始 H
 ## 快速上手
 
 ```bash
-# 创建虚拟环境（Python 3.9+，推荐 3.10+）
-cd LLM_POC
-python3 -m venv .venv
-source .venv/bin/activate
+# 统一安装主环境（默认使用 Python 3.11，创建 PoCGen/.venv）
+cd LLM_POC/PoCGen
+./setup_env.sh
 
-# 安装依赖
-pip install -r PoCGen/requirements.txt
+# 如需二进制分析，把 IDA 作为本机外部依赖接入同一个虚拟环境
+./setup_env.sh --with-ida --ida-home /home/li/ida9.1
+
+# 激活环境
+source .venv/bin/activate
 
 # 浏览器采样需要额外安装 Playwright Chromium（可选）
 playwright install chromium
