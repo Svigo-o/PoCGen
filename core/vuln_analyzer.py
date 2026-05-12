@@ -249,9 +249,6 @@ def analyze_vulnerability(
     code_texts: List[str],
     cvenumber: Optional[str] = None,
     binary_path: Optional[str] = None,
-    mcp_url: Optional[str] = None,
-    temperature: float = 0.2,
-    max_tokens: int = 8000,
 ) -> VulnAnalysisResult:
     """Run vulnerability analysis: source code + optional IDA MCP binary analysis.
 
@@ -263,7 +260,7 @@ def analyze_vulnerability(
     _log_vuln(
         f"Vulnerability analysis starting: cve={cvenumber}, "
         f"code_files={len(code_texts)}, desc_len={len(description)}, "
-        f"binary={binary_path or '<none>'}, mcp_url={mcp_url}",
+        f"binary={binary_path or '<none>'}",
         log_path,
     )
 
@@ -274,7 +271,7 @@ def analyze_vulnerability(
     if binary_path:
         console.print("[bold]Vulnerability analysis: collecting IDA MCP binary data")
 
-        endpoint = mcp_url or SETTINGS.ida_mcp_url
+        endpoint = SETTINGS.ida_mcp_url
         mcp = IDAMCPClient(base_url=endpoint, timeout=300.0)
 
         service = IDAMCPService(
@@ -351,7 +348,7 @@ def analyze_vulnerability(
 
     client = LLMClient(timeout_seconds=300)
     try:
-        raw_output = client.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        raw_output = client.chat(messages, temperature=SETTINGS.temperature, max_tokens=SETTINGS.max_tokens)
     except Exception as exc:
         console.print(f"[red]LLM call failed: {exc}")
         return VulnAnalysisResult(

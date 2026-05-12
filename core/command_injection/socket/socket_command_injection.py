@@ -89,14 +89,11 @@ def generate_command_injection_socket(
     code_texts: List[str],
     target: Optional[str] = None,
     vuln_type: Optional[str] = None,
-    temperature: float = 0.2,
-    max_tokens: int = 4000,
     payload: Optional[str] = None,
     probe_target: bool = False,
     auto_validate: bool = False,
     max_iterations: Optional[int] = None,
     stop_on_success: Optional[bool] = None,
-    monitor_timeout: Optional[float] = None,
     cvenumber: Optional[str] = None,
     login_url: Optional[str] = None,
     login_username: Optional[str] = None,
@@ -104,9 +101,7 @@ def generate_command_injection_socket(
     login_user_field: str = "username",
     login_pass_field: str = "password",
     use_browser_login: bool = False,
-    browser_headless: Optional[bool] = None,
     binary_path: Optional[str] = None,
-    ida_mcp_url: Optional[str] = None,
 ) -> GenerationResult:
     handler_key = vuln_type or CommandInjectionSocketHandler.name
     handler = CommandInjectionSocketHandler()
@@ -167,9 +162,6 @@ def generate_command_injection_socket(
                 code_texts=code_texts,
                 cvenumber=cvenumber,
                 binary_path=binary_path,
-                mcp_url=ida_mcp_url,
-                temperature=temperature,
-                max_tokens=max_tokens,
             )
             log_chat(f"Vuln analysis result: valid={vuln_result.is_valid}, summary={vuln_result.summary}")
             if vuln_result.is_valid:
@@ -186,7 +178,7 @@ def generate_command_injection_socket(
     if not auto_validate:
         max_iters = 1
     stop_after_success = SETTINGS.stop_on_success if stop_on_success is None else stop_on_success
-    monitor_wait = monitor_timeout or SETTINGS.monitor_timeout
+    monitor_wait = SETTINGS.monitor_timeout
     out_dir = SETTINGS.socket_save_dir
     attempts: List[AttemptResult] = []
     feedback_text: Optional[str] = None
@@ -230,7 +222,7 @@ def generate_command_injection_socket(
                         login_password=login_password,
                         login_user_field=login_user_field,
                         login_pass_field=login_pass_field,
-                        headless=browser_headless,
+                        headless=SETTINGS.browser_headless,
                         capture_posts=False,
                         capture_cookies=True,
                         capture_socket_messages=True,
@@ -286,7 +278,7 @@ def generate_command_injection_socket(
                 "\n".join(f"- {m.role}: {m.content}" for m in messages)
             )
 
-            raw_output = llm_client.chat(messages, temperature=temperature, max_tokens=max_tokens)
+            raw_output = llm_client.chat(messages, temperature=SETTINGS.temperature, max_tokens=SETTINGS.max_tokens)
 
             log_chat("Model output:\n" + raw_output)
 

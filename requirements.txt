@@ -13,5 +13,7 @@ langchain_classic
 websocket-client
 numpy<1.25
 scipy<1.11
+mcp>=1.0.0
+anyio>=4.0.0
 
 

