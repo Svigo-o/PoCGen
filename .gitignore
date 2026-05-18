@@ -25,11 +25,6 @@ logs/
 .pytest_cache/
 .cache/
 
-# ----- Playwright (optional) -----
-playwright-report/
-test-results/
-*.webm
-
 
 # ----- Misc -----
 **/__pycache__/
@@ -37,4 +32,3 @@ test-results/
 # ----- Project outputs -----
 # Ignore generated PoC output files
 output/
-CLAUDE.md
