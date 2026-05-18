@@ -16,7 +16,7 @@ mcp = FastMCP(
         "You (Claude) are the analyst and PoC author. Use these tools for capabilities you lack:\n\n"
         "INTELLIGENCE GATHERING:\n"
         "- pocgen_cve_intelligence: crawl NVD mirror + reference links for CVE data\n"
-        "- pocgen_sample_target: Playwright browser probe (login, capture POST/cookies)\n\n"
+        "- pocgen_sample_target: CDP browser probe (login, capture POST/cookies)\n\n"
         "SOURCE CODE:\n"
         "- pocgen_read_code: read source files by path or glob pattern\n\n"
         "VALIDATION & MONITORING:\n"

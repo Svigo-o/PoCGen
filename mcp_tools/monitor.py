@@ -120,8 +120,8 @@ def register_monitor_tools(mcp: FastMCP) -> None:
         import anyio
 
         def _sync() -> dict:
-            from PoCGen.core.command_injection.http.validators import parse_and_validate, fix_content_length
-            from PoCGen.core.command_injection.http.remote_validator import validate_http_requests
+            from PoCGen.core.shared.http_validators import parse_and_validate, fix_content_length
+            from PoCGen.core.shared.http_remote_validator import validate_http_requests
             from PoCGen.core.attacker_monitor import reset_external_monitor, wait_for_external_monitor
 
             # Collect .http files
@@ -198,3 +198,121 @@ def register_monitor_tools(mcp: FastMCP) -> None:
 
         result = await anyio.to_thread.run_sync(_sync)
         return _truncate(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    import time
+
+    parser = argparse.ArgumentParser(description="Attacker monitor 管理工具")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # start
+    p = sub.add_parser("start", help="启动 attacker monitor HTTP 服务器")
+    p.add_argument("--url", default="http://0.0.0.0:6666", help="监听地址")
+    p.add_argument("--timeout", type=float, default=60, help="默认超时秒数")
+
+    # wait
+    p = sub.add_parser("wait", help="等待 wget 回调")
+    p.add_argument("--timeout", type=float, default=10, help="等待超时秒数")
+    p.add_argument("--url", default="http://0.0.0.0:6666", help="Monitor 地址")
+
+    # stop
+    sub.add_parser("stop", help="停止 attacker monitor")
+
+    # batch-validate
+    p = sub.add_parser("batch-validate", help="批量验证目录下所有 .http PoC 文件")
+    p.add_argument("poc_dir", help="包含 .http 文件的目录")
+    p.add_argument("--target", required=True, help="目标 base URL")
+    p.add_argument("--monitor-url", default="http://0.0.0.0:6666", help="Attacker monitor 地址")
+    p.add_argument("--wait", type=float, default=3, help="每个 PoC 等待回调秒数")
+
+    args = parser.parse_args()
+
+    if args.cmd == "start":
+        from PoCGen.core.attacker_monitor import AttackerMonitor
+        monitor = AttackerMonitor(args.url, timeout=args.timeout)
+        monitor.start()
+        if monitor.is_running():
+            print(f"Monitor started on {args.url}")
+            print("Press Ctrl+C to stop...")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                monitor.stop()
+                print("Monitor stopped")
+        else:
+            print("Failed to start monitor", file=sys.stderr)
+            exit(1)
+
+    elif args.cmd == "wait":
+        from PoCGen.core.attacker_monitor import wait_for_external_monitor
+        hit, summary = wait_for_external_monitor(args.url, timeout=args.timeout)
+        print(f"Hit: {hit}")
+        if summary:
+            print(f"Summary: {summary}")
+
+    elif args.cmd == "stop":
+        from PoCGen.core.attacker_monitor import reset_external_monitor
+        print("Use Ctrl+C in the start terminal to stop, or:")
+        print("kill $(lsof -ti:6666) 2>/dev/null")
+
+    elif args.cmd == "batch-validate":
+        from PoCGen.core.shared.http_validators import parse_and_validate, fix_content_length
+        from PoCGen.core.shared.http_remote_validator import validate_http_requests
+        from PoCGen.core.attacker_monitor import reset_external_monitor, wait_for_external_monitor
+        import glob as glob_mod
+
+        patterns = [args.poc_dir.rstrip("/") + "/*.http", args.poc_dir.rstrip("/") + "/**/*.http"]
+        files = []
+        seen = set()
+        for pat in patterns:
+            for fp in glob_mod.glob(pat, recursive=True):
+                if fp not in seen:
+                    seen.add(fp)
+                    files.append(fp)
+        files.sort()
+
+        if not files:
+            print(f"No .http files found in {args.poc_dir}", file=sys.stderr)
+            exit(1)
+
+        confirmed = 0
+        for fp in files:
+            fname = fp.rsplit("/", 1)[-1]
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    raw = f.read()
+            except Exception as e:
+                print(f"{fname}: READ_ERROR ({e})")
+                continue
+
+            msg, errs = parse_and_validate(raw)
+            if errs:
+                print(f"{fname}: PARSE_ERROR ({'; '.join(errs)})")
+                continue
+            fix_content_length(msg)
+
+            reset_external_monitor(args.monitor_url, timeout=1.0)
+
+            try:
+                vr_list = validate_http_requests([msg], args.target)
+                vr = vr_list[0] if vr_list else None
+            except Exception as e:
+                print(f"{fname}: SEND_ERROR ({e})")
+                continue
+
+            if vr and not vr.success and vr.error:
+                print(f"{fname}: HTTP_ERROR {vr.status_code} ({vr.error})")
+                continue
+
+            hit, _ = wait_for_external_monitor(args.monitor_url, timeout=args.wait, poll_interval=0.5)
+            if hit:
+                confirmed += 1
+                print(f"{fname}: CONFIRMED")
+            else:
+                print(f"{fname}: NO_CALLBACK")
+
+        print(f"\nTotal: {len(files)}, Confirmed: {confirmed}, Failed: {len(files) - confirmed}")

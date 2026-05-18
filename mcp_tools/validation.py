@@ -22,7 +22,7 @@ def register_validation_tools(mcp: FastMCP) -> None:
             raw: Raw HTTP request text (e.g. "POST /cgi-bin/ping.cgi HTTP/1.1\\nHost: ...")
         """
         import anyio
-        from PoCGen.core.command_injection.http.validators import parse_and_validate, fix_content_length
+        from PoCGen.core.shared.http_validators import parse_and_validate, fix_content_length
 
         def _sync() -> dict:
             try:
@@ -54,7 +54,7 @@ def register_validation_tools(mcp: FastMCP) -> None:
             raw: Raw JSON socket event text (e.g. '{"url":"ws://...", "event":"message", ...}')
         """
         import anyio
-        from PoCGen.core.command_injection.socket.validators import parse_and_validate
+        from PoCGen.core.shared.socket_validators import parse_and_validate
 
         def _sync() -> dict:
             try:
@@ -90,7 +90,7 @@ def register_validation_tools(mcp: FastMCP) -> None:
         """
         import anyio
         from PoCGen.core.models import HTTPMessage
-        from PoCGen.core.command_injection.http.remote_validator import validate_http_requests
+        from PoCGen.core.shared.http_remote_validator import validate_http_requests
 
         def _sync() -> dict:
             http_msgs = []
@@ -136,7 +136,7 @@ def register_validation_tools(mcp: FastMCP) -> None:
         """
         import anyio
         from PoCGen.core.models import SocketEventMessage
-        from PoCGen.core.command_injection.socket.remote_validator import validate_socket_events
+        from PoCGen.core.shared.socket_remote_validator import validate_socket_events
 
         def _sync() -> dict:
             socket_msgs = []
@@ -173,3 +173,94 @@ def register_validation_tools(mcp: FastMCP) -> None:
 
         result = await anyio.to_thread.run_sync(_sync)
         return _truncate(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="HTTP/Socket.IO PoC 解析与验证工具")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # parse-http
+    p = sub.add_parser("parse-http", help="解析原始 HTTP 请求")
+    p.add_argument("--raw", help="原始 HTTP 请求文本")
+    p.add_argument("--file", help="从文件读取原始 HTTP 请求")
+
+    # parse-socket
+    p = sub.add_parser("parse-socket", help="解析 Socket.IO 事件 JSON")
+    p.add_argument("--raw", help="原始 Socket.IO JSON 文本")
+    p.add_argument("--file", help="从文件读取")
+
+    # validate-http
+    p = sub.add_parser("validate-http", help="重放 HTTP 请求到目标验证")
+    p.add_argument("--file", required=True, help="包含原始 HTTP 请求的文件")
+    p.add_argument("--target", required=True, help="目标 base URL")
+
+    # validate-socket
+    p = sub.add_parser("validate-socket", help="分发 Socket.IO 事件到目标验证")
+    p.add_argument("--file", required=True, help="包含 Socket.IO JSON 的文件")
+    p.add_argument("--target", help="目标 URL（用于解析相对 ws/wss 地址）")
+
+    args = parser.parse_args()
+
+    if args.cmd == "parse-http":
+        raw = args.raw
+        if not raw and args.file:
+            with open(args.file, "r", encoding="utf-8") as f:
+                raw = f.read()
+        if not raw:
+            print("Error: --raw or --file required", file=sys.stderr)
+            exit(1)
+        from PoCGen.core.shared.http_validators import parse_and_validate, fix_content_length
+        msg, errs = parse_and_validate(raw)
+        fix_content_length(msg)
+        result = {"parsed": {"method": msg.method, "path": msg.path, "version": msg.version, "headers": msg.headers, "body": msg.body}, "errors": errs}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    elif args.cmd == "parse-socket":
+        raw = args.raw
+        if not raw and args.file:
+            with open(args.file, "r", encoding="utf-8") as f:
+                raw = f.read()
+        if not raw:
+            print("Error: --raw or --file required", file=sys.stderr)
+            exit(1)
+        from PoCGen.core.shared.socket_validators import parse_and_validate as socket_parse
+        msg, errs = socket_parse(raw)
+        result = {"parsed": {"url": msg.url, "path": msg.path, "event": msg.event, "payload": msg.payload, "namespace": msg.namespace, "headers": msg.headers, "cookies": msg.cookies}, "errors": errs}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    elif args.cmd == "validate-http":
+        with open(args.file, "r", encoding="utf-8") as f:
+            raw = f.read()
+        from PoCGen.core.shared.http_validators import parse_and_validate, fix_content_length
+        from PoCGen.core.shared.http_remote_validator import validate_http_requests
+        msg, errs = parse_and_validate(raw)
+        fix_content_length(msg)
+        if errs:
+            print(f"Parse warnings: {errs}", file=sys.stderr)
+        results = validate_http_requests([msg], args.target)
+        for r in results:
+            status = f"HTTP {r.status_code}" if r.status_code else "no status"
+            print(f"#{r.request_index}: {'OK' if r.success else 'FAIL'} {status} {r.url}")
+            if r.response_preview:
+                print(f"  Preview: {r.response_preview[:200]}")
+            if r.error:
+                print(f"  Error: {r.error}")
+
+    elif args.cmd == "validate-socket":
+        with open(args.file, "r", encoding="utf-8") as f:
+            raw = f.read()
+        from PoCGen.core.shared.socket_validators import parse_and_validate as socket_parse
+        from PoCGen.core.shared.socket_remote_validator import validate_socket_events
+        msg, errs = socket_parse(raw)
+        if errs:
+            print(f"Parse warnings: {errs}", file=sys.stderr)
+        results = validate_socket_events([msg], args.target)
+        for r in results:
+            print(f"#{r.request_index}: {'OK' if r.success else 'FAIL'} {r.url}")
+            if r.response_preview:
+                print(f"  Preview: {r.response_preview[:200]}")
+            if r.error:
+                print(f"  Error: {r.error}")

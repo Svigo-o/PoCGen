@@ -1,1 +1,1 @@
-from .http_path_traversal import PathTraversalHTTPHandler, generate_path_traversal_http  # noqa: F401
+from .handler import PathTraversalHTTPHandler  # noqa: F401

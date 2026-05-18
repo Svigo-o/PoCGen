@@ -1,31 +1,13 @@
 from __future__ import annotations
-from typing import Callable, Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type
 
 from PoCGen.config.config import SETTINGS
-from .command_injection.http.http_command_injection import (
-    CommandInjectionHTTPHandler,
-    generate_command_injection_http,
-)
-from .command_injection.socket.socket_command_injection import (
-    CommandInjectionSocketHandler,
-    generate_command_injection_socket,
-)
-from .stackoverflow.http.http_stack_overflow import (
-    StackOverflowHTTPHandler,
-    generate_stack_overflow_http,
-)
-from .cross_site_scripting.http_cross_site_scripting import (
-    CrossSiteScriptingHTTPHandler,
-    generate_cross_site_scripting_http,
-)
-from .stackoverflow.python.python_stack_overflow import (
-    StackOverflowPythonHandler,
-    generate_stack_overflow_python,
-)
-from .path_traversal.http_path_traversal import (
-    PathTraversalHTTPHandler,
-    generate_path_traversal_http,
-)
+from .command_injection.handler import CommandInjectionHTTPHandler
+from .socket.handler import CommandInjectionSocketHandler
+from .stackoverflow.handler import StackOverflowHTTPHandler
+from .cross_site_scripting.handler import CrossSiteScriptingHTTPHandler
+from .stackoverflow_python.handler import StackOverflowPythonHandler
+from .path_traversal.handler import PathTraversalHTTPHandler
 from .models import GenerationResult, VulnHandler
 
 
@@ -37,9 +19,6 @@ HANDLERS: Dict[str, Type[VulnHandler]] = {
     StackOverflowPythonHandler.name: StackOverflowPythonHandler,
     PathTraversalHTTPHandler.name: PathTraversalHTTPHandler,
 }
-
-HandlerEntryPoint = Callable[..., GenerationResult]
-HANDLER_ENTRYPOINTS: Dict[str, HandlerEntryPoint] = {}
 
 
 def get_handler(vuln_type: Optional[str] = None) -> VulnHandler:
@@ -60,7 +39,7 @@ def generate_poc(
     auto_validate: bool = False,
     max_iterations: Optional[int] = None,
     stop_on_success: Optional[bool] = None,
-    cvenumber:Optional[str] = None,
+    cvenumber: Optional[str] = None,
     login_url: Optional[str] = None,
     login_username: Optional[str] = None,
     login_password: Optional[str] = None,
@@ -70,11 +49,9 @@ def generate_poc(
     binary_path: Optional[str] = None,
 ) -> GenerationResult:
     selected_vuln_type = vuln_type or SETTINGS.default_vuln_type
-    handler_entry = HANDLER_ENTRYPOINTS.get(selected_vuln_type)
-    if not handler_entry:
-        raise ValueError(f"Unsupported vuln type: {selected_vuln_type}")
+    handler = get_handler(selected_vuln_type)
 
-    return handler_entry(
+    return handler.generate(
         description=description,
         code_texts=code_texts,
         target=target,
@@ -93,11 +70,3 @@ def generate_poc(
         use_browser_login=use_browser_login,
         binary_path=binary_path,
     )
-
-HANDLER_ENTRYPOINTS[CommandInjectionHTTPHandler.name] = generate_command_injection_http
-HANDLER_ENTRYPOINTS[CommandInjectionSocketHandler.name] = generate_command_injection_socket
-HANDLER_ENTRYPOINTS[StackOverflowHTTPHandler.name] = generate_stack_overflow_http
-HANDLER_ENTRYPOINTS[CrossSiteScriptingHTTPHandler.name] = generate_cross_site_scripting_http
-HANDLER_ENTRYPOINTS[StackOverflowPythonHandler.name] = generate_stack_overflow_python
-HANDLER_ENTRYPOINTS[PathTraversalHTTPHandler.name] = generate_path_traversal_http
-

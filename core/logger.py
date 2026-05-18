@@ -18,7 +18,7 @@ def _ensure_log() -> None:
         return
     LOG_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "logs"))
     os.makedirs(LOG_DIR, exist_ok=True)
-    LOG_FILE = os.path.join(LOG_DIR, "playwright_probe.log")
+    LOG_FILE = os.path.join(LOG_DIR, "cdp_probe.log")
     LOG_NEEDS_SEPARATOR = True
 
 

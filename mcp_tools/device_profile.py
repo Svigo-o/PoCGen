@@ -99,3 +99,49 @@ def register_device_profile_tools(mcp: FastMCP) -> None:
 
         result = await anyio.to_thread.run_sync(_sync)
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="设备 Profile 管理工具")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # list
+    sub.add_parser("list", help="列出所有已保存的设备 profiles")
+
+    # load
+    p = sub.add_parser("load", help="加载设备 profile")
+    p.add_argument("device_name", help="设备型号名称")
+
+    # save (from JSON file)
+    p = sub.add_parser("save", help="从 JSON 文件保存设备 profile")
+    p.add_argument("json_file", help="包含 profile 数据的 JSON 文件")
+
+    args = parser.parse_args()
+
+    if args.cmd == "list":
+        from PoCGen.core.device_profile import list_profiles
+        profiles = list_profiles()
+        if profiles:
+            for name in profiles:
+                print(name)
+        else:
+            print("No profiles saved")
+
+    elif args.cmd == "load":
+        from PoCGen.core.device_profile import load_profile
+        profile = load_profile(args.device_name)
+        if profile:
+            print(profile.as_prompt_block())
+        else:
+            print(f"Profile not found: {args.device_name}")
+            exit(1)
+
+    elif args.cmd == "save":
+        from PoCGen.core.device_profile import DeviceProfile, save_profile
+        with open(args.json_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        profile = DeviceProfile(**data)
+        path = save_profile(profile)
+        print(f"Saved: {path}")

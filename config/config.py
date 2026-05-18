@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
@@ -19,11 +20,28 @@ _MAIN_IDA_MCP_BIN = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", ".venv", "bin", "idalib-mcp")
 )
 
-
 def _default_ida_mcp_bin() -> str:
     if os.path.exists(_MAIN_IDA_MCP_BIN):
         return _MAIN_IDA_MCP_BIN
     return _MAIN_IDA_MCP_BIN
+
+
+def _default_chrome_path() -> str:
+    """Find Chrome/Chromium binary: system PATH first, then common fixed paths."""
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    # Common fixed paths on Linux
+    for path in (
+        "/opt/google/chrome/chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ):
+        if os.path.isfile(path):
+            return path
+    return ""
 
 
 class ProviderSettings(BaseModel):
@@ -42,14 +60,14 @@ class LLMSettings(BaseModel):
         providers = values.get("providers") or {}
         if not providers:
             providers = {
-                "deepseek": ProviderSettings(
-                    base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
-                    api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
-                    model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
-                ),
+                # "deepseek": ProviderSettings(
+                #     base_url=os.getenv("POCGEN_DS_BASE_URL", "http://222.20.126.10:33330/v1"),
+                #     api_key=os.getenv("POCGEN_DS_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                #     model=os.getenv("POCGEN_DS_MODEL", "deepseek-chat"),
+                # ),
                 "glm": ProviderSettings(
                     base_url=os.getenv("POCGEN_GLM_BASE_URL", "http://222.20.126.10:33330/v1"),
-                    api_key=os.getenv("POCGEN_GLM_API_KEY", "sk-IpyjtAxK47UZqLHtYc1lS4ck69W7Qzo3fnc5p5DEiNOblWZk"),
+                    api_key=os.getenv("POCGEN_GLM_API_KEY", "sk-GTrEFsXsixd358KVikpc70isycB0QNJHuX04mW2efP1L163U"),
                     model=os.getenv("POCGEN_GLM_MODEL", "glm-5.1-fp8")
                 )                
             }
@@ -59,7 +77,7 @@ class LLMSettings(BaseModel):
             normalized[key.lower()] = cfg_model
         values["providers"] = normalized
         if "default_provider" not in values:
-            values["default_provider"] = os.getenv("POCGEN_DEFAULT_PROVIDER", "deepseek")
+            values["default_provider"] = os.getenv("POCGEN_DEFAULT_PROVIDER", "glm")
         return values
 
     @model_validator(mode="after")
@@ -97,6 +115,9 @@ class AppSettings(BaseModel):
     temperature: float = Field(default=float(os.getenv("POCGEN_TEMPERATURE", "0.2")))
     max_tokens: int = Field(default=int(os.getenv("POCGEN_MAX_TOKENS", "65535")))
     browser_headless: bool = Field(default=os.getenv("POCGEN_BROWSER_HEADLESS", "true").lower() not in {"0", "false", "no"})
+    cdp_port: int = Field(default=int(os.getenv("POCGEN_CDP_PORT", "9222")))
+    cdp_chrome_path: str = Field(default=os.getenv("POCGEN_CDP_CHROME",
+        _default_chrome_path()))
     ida_mcp_url: str = Field(default=os.getenv("POCGEN_IDA_MCP_URL", "http://127.0.0.1:8745/mcp"))
     ida_mcp_bin: str = Field(
         default=os.getenv(

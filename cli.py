@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--login-password", default=None, help="可选，登录密码")
     parser.add_argument("--login-user-field", default="username", help="登录表单用户名字段名，默认 username")
     parser.add_argument("--login-pass-field", default="password", help="登录表单密码字段名，默认 password")
-    parser.add_argument("--browser-login", action="store_true", help="使用 Playwright 浏览器登录以获取 cookie 后再验证")
+    parser.add_argument("--browser-login", action="store_true", help="使用 CDP 浏览器登录以获取 cookie 后再验证")
     parser.add_argument("--CVENumber",  default=None, help="CVE 编号，用于自动爬取漏洞情报")
     parser.add_argument("--binary", default=None, help="漏洞二进制文件路径，启用 Step1+Step2 自动分析（IDA MCP）")
     args = parser.parse_args()
